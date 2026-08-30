@@ -1,6 +1,6 @@
 // 关键词 webhook 转发器。契约（AGENT.md R2 / dev-plan §7）：
 // POST url，JSON {user_id, account_id, keyword, text, ts, msg_id}
-// 带 secret 时附 X-SSC-Timestamp + X-SSC-Signature = HMAC-SHA256(secret, ts.rawBody)，防重放窗口 5min
+// 带 secret 时附 X-MOE-Timestamp + X-MOE-Signature = HMAC-SHA256(secret, ts.rawBody)，防重放窗口 5min
 // 5s 超时；2xx 且 body 为 {reply} → 该文本回发微信；2xx 无 reply → 默认回执；失败 → 错误回执
 
 import { decryptString, hmacSignHex } from "../crypto.ts";
@@ -33,8 +33,8 @@ export function createForwarder(core: Core) {
         try {
           const secret = decryptString(core.masterKey, secretEnc);
           const ts = Math.floor(Date.now() / 1000);
-          headers["x-ssc-timestamp"] = String(ts);
-          headers["x-ssc-signature"] = hmacSignHex(secret, `${ts}.${body}`);
+          headers["x-moe-timestamp"] = String(ts);
+          headers["x-moe-signature"] = hmacSignHex(secret, `${ts}.${body}`);
         } catch {
           return { ok: false, error: "webhook secret 解密失败" };
         }

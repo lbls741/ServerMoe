@@ -7,7 +7,7 @@ export function renderIndex(): string {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SuperServerChan</title>
+<title>ServerMoe</title>
 <style>
   body { font-family: system-ui, sans-serif; max-width: 860px; margin: 24px auto; padding: 0 16px; color: #222; }
   h1 { font-size: 20px; } h2 { font-size: 15px; margin: 0 0 10px; }
@@ -32,7 +32,7 @@ export function renderIndex(): string {
 </style>
 </head>
 <body>
-<h1>SuperServerChan 网关</h1>
+<h1>ServerMoe 网关</h1>
 
 <section id="auth">
   <h2>管理令牌</h2>
@@ -137,7 +137,7 @@ export function renderIndex(): string {
 
 <script>
 const $ = (id) => document.getElementById(id);
-const tok = () => localStorage.getItem("ssc_admin") || "";
+const tok = () => localStorage.getItem("moe_admin") || "";
 const api = (path, opts = {}) => fetch(path, { ...opts,
   headers: { "content-type": "application/json", authorization: "Bearer " + tok(), ...(opts.headers || {}) } });
 const fmt = (ts) => ts ? new Date(ts).toLocaleString("zh-CN") : "—";
@@ -145,7 +145,7 @@ let accounts = [];
 let curAccount = "";
 
 $("tok").value = tok();
-$("tokBtn").onclick = () => { localStorage.setItem("ssc_admin", $("tok").value.trim()); boot(); };
+$("tokBtn").onclick = () => { localStorage.setItem("moe_admin", $("tok").value.trim()); boot(); };
 
 async function boot() {
   if (!tok()) { $("accounts").innerHTML = '<tr><td class="muted">请先在上方填入管理令牌并点「保存」</td></tr>'; return; }

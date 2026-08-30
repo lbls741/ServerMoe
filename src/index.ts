@@ -21,7 +21,7 @@ import { createInboundRouter } from "./router/inbound.ts";
 import { createMailService } from "./mail/service.ts";
 
 const cfg = loadConfig();
-const log = createLogger(cfg.logLevel, { svc: "ssc" });
+const log = createLogger(cfg.logLevel, { svc: "servermoe" });
 
 mkdirSync(cfg.dataDir, { recursive: true });
 const db = openDb(cfg.dbPath);

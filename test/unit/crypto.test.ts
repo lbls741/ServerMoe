@@ -35,8 +35,8 @@ describe("crypto", () => {
     expect(() => decryptString(other, encryptString(key, "data"))).toThrow();
   });
 
-  test("sendkey format (SSC prefix, 16 unambiguous chars)", () => {
-    expect(generateSendkey()).toMatch(/^SSC[23456789A-HJ-NP-Za-km-z]{16}$/);
+  test("sendkey format (MOE prefix, 16 unambiguous chars)", () => {
+    expect(generateSendkey()).toMatch(/^MOE[23456789A-HJ-NP-Za-km-z]{16}$/);
   });
 
   test("hmac / sha256 / uuid shapes", () => {

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * SuperServerChan「关键词 → Webhook」接收 Demo（零依赖，Node.js >= 18）
+ * ServerMoe「关键词 → Webhook」接收 Demo（零依赖，Node.js >= 18）
  *
  * 这个 demo 演示双向消息的「接收端」完整闭环：
  *   1. 启动一个极简 HTTP 服务作为你的应用 webhook
@@ -11,7 +11,7 @@
  *
  * 用法：
  *   GATEWAY=http://localhost:8080 \
- *   SENDKEY=SSCxxxxxxxxxxxxxxxx \
+ *   SENDKEY=MOExxxxxxxxxxxxxxxx \
  *   KEYWORD=demo \
  *   WEBHOOK_SECRET=my-secret \
  *   node demo.js
@@ -59,7 +59,7 @@ const SECRET = (process.env.WEBHOOK_SECRET || "").trim();
 
 if (!SENDKEY) {
   console.error("缺少 SENDKEY 环境变量。用法示例：");
-  console.error("  SENDKEY=SSCxxxx KEYWORD=demo node demo.js");
+  console.error("  SENDKEY=MOExxxx KEYWORD=demo node demo.js");
   process.exit(1);
 }
 if (typeof fetch !== "function") {
@@ -67,7 +67,7 @@ if (typeof fetch !== "function") {
   process.exit(1);
 }
 
-/** 校验网关转发请求的 HMAC-SHA256 签名（X-SSC-Timestamp + X-SSC-Signature）。 */
+/** 校验网关转发请求的 HMAC-SHA256 签名（X-MOE-Timestamp + X-MOE-Signature）。 */
 function verifySignature(raw, ts, sig) {
   if (!SECRET) return null; // 未配置 secret：跳过验签
   if (!ts || !sig) return false;
@@ -113,7 +113,7 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    const sigOk = verifySignature(raw, req.headers["x-ssc-timestamp"], req.headers["x-ssc-signature"]);
+    const sigOk = verifySignature(raw, req.headers["x-moe-timestamp"], req.headers["x-moe-signature"]);
     if (sigOk === false) {
       // 验签失败：生产应用应直接拒绝，防止伪造请求
       console.error("⚠️  签名校验失败，已拒绝该请求（secret 不一致或非网关来源）");

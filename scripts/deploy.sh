@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =====================================================================
-# SuperServerChan 裸 Linux 一键部署脚本
+# ServerMoe 裸 Linux 一键部署脚本
 #
 # 用法（在已上传项目文件的目录中，以 root 运行）：
 #   sudo bash deploy.sh install    首次安装并启动（默认）
@@ -10,16 +10,16 @@
 #
 # 行为：
 #   - 自动安装 Bun（固定版本）与专用系统用户 ssc
-#   - 数据目录 /var/lib/superserverchan（SQLite/凭据/主密钥，请纳入备份）
-#   - 首次安装自动生成 SSC_ADMIN_TOKEN 与 SSC_SECRET 写入 /etc/superserverchan.env
+#   - 数据目录 /var/lib/servermoe（SQLite/凭据/主密钥，请纳入备份）
+#   - 首次安装自动生成 MOE_ADMIN_TOKEN 与 MOE_SECRET 写入 /etc/servermoe.env
 #   - systemd 服务 ssc.service：开机自启、崩溃自动重启
 # =====================================================================
 set -euo pipefail
 
-APP="superserverchan"
-INSTALL_DIR="/opt/superserverchan"
-DATA_DIR="/var/lib/superserverchan"
-ENV_FILE="/etc/superserverchan.env"
+APP="servermoe"
+INSTALL_DIR="/opt/servermoe"
+DATA_DIR="/var/lib/servermoe"
+ENV_FILE="/etc/servermoe.env"
 SERVICE="ssc"
 RUN_USER="ssc"
 BUN_VERSION="1.4.0"
@@ -85,19 +85,19 @@ ensure_env() {
     return
   fi
   cat > "$ENV_FILE" <<EOF
-SSC_PORT=8080
-SSC_DATA_DIR=$DATA_DIR
-SSC_ADMIN_TOKEN=$(rand_hex 24)
-SSC_SECRET=$(rand_hex 32)
-# SSC_SEAT_LIMIT=5
-# SSC_TEXT_CHUNK_LIMIT=3000
-# SSC_SEND_RATE_PER_HOUR=60
+MOE_PORT=8080
+MOE_DATA_DIR=$DATA_DIR
+MOE_ADMIN_TOKEN=$(rand_hex 24)
+MOE_SECRET=$(rand_hex 32)
+# MOE_SEAT_LIMIT=5
+# MOE_TEXT_CHUNK_LIMIT=3000
+# MOE_SEND_RATE_PER_HOUR=60
 EOF
   chmod 600 "$ENV_FILE"
   log "已生成 $ENV_FILE（含管理令牌，可用 grep ADMIN_TOKEN 查看）"
 }
 
-env_port() { grep -E '^SSC_PORT=' "$ENV_FILE" 2>/dev/null | cut -d= -f2 || echo 8080; }
+env_port() { grep -E '^MOE_PORT=' "$ENV_FILE" 2>/dev/null | cut -d= -f2 || echo 8080; }
 
 # ---- 代码同步 ---------------------------------------------------------
 
@@ -114,7 +114,7 @@ sync_code() {
 write_unit() {
   cat > "/etc/systemd/system/${SERVICE}.service" <<EOF
 [Unit]
-Description=SuperServerChan gateway (WeChat push + keyword router)
+Description=ServerMoe gateway (WeChat push + keyword router)
 After=network-online.target
 Wants=network-online.target
 

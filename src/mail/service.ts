@@ -270,7 +270,7 @@ export function createMailService(core: Core, push: PushService, deps: MailBacke
   async function sendTest(accountId: string, to: string): Promise<void> {
     const cfg = configOf(accountId);
     if (!cfg) throw new Error("邮件桥未配置");
-    await smtpSend(cfg.smtp, cfg.from, { to, subject: "SuperServerChan SMTP 测试", body: `这是一封测试邮件，发自网关 (${randomId().slice(0, 8)})。` });
+    await smtpSend(cfg.smtp, cfg.from, { to, subject: "ServerMoe SMTP 测试", body: `这是一封测试邮件，发自网关 (${randomId().slice(0, 8)})。` });
   }
 
   // ---- `mail` 关键词命令 ----

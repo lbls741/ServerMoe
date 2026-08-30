@@ -1,6 +1,6 @@
 # 反向控制接入文档（关键词路由 + 推送 API）
 
-SuperServerChan 是双向的：应用既能**推送**消息到微信，也能通过**关键词**接收微信里的指令。
+ServerMoe 是双向的：应用既能**推送**消息到微信，也能通过**关键词**接收微信里的指令。
 本文是给开发者的完整接入说明。零依赖可运行示例见 [examples/keyword-receiver](../examples/keyword-receiver/)。
 
 ```
@@ -11,7 +11,7 @@ SuperServerChan 是双向的：应用既能**推送**消息到微信，也能通
 
 ## 0. 前置条件
 
-1. 拿到 **sendkey**：管理页绑定微信后签发（`SSC` 开头），或「重置 sendkey」重新获取。sendkey 即身份，一个 sendkey 对应一个绑定账号。
+1. 拿到 **sendkey**：管理页绑定微信后签发（`MOE` 开头），或「重置 sendkey」重新获取。sendkey 即身份，一个 sendkey 对应一个绑定账号。
 2. 完成**预热**：在微信里给 ClawBot 发送任意一条消息（如 `hello`）。微信要求每条下行消息必须携带一次真实会话的上下文令牌，预热后网关会自动捕获并缓存；**未预热时推送返回 code 450 并自动排队，预热后自动补发**，不会丢。
 3. 保留字：`help`、`status`、`bind`、`mail` 为网关内置命令，应用不得注册这些关键词。
 
@@ -46,8 +46,8 @@ GET/POST http://<网关>/{sendkey}.send
 示例：
 
 ```bash
-curl "http://gw.example.com/SSCxxxx.send?title=构建完成&desp=**耗时** 3s"
-curl -X POST http://gw.example.com/SSCxxxx.send -H "Content-Type: application/json" \
+curl "http://gw.example.com/MOExxxx.send?title=构建完成&desp=**耗时** 3s"
+curl -X POST http://gw.example.com/MOExxxx.send -H "Content-Type: application/json" \
   -d '{"title":"告警","desp":"磁盘使用率 **95%**","short":"磁盘告警"}'
 ```
 
@@ -64,7 +64,7 @@ DELETE /api/v1/keywords/:id      删除
 
 ```bash
 curl -X POST http://gw.example.com/api/v1/keywords \
-  -H "Authorization: Bearer SSCxxxx" -H "Content-Type: application/json" \
+  -H "Authorization: Bearer MOExxxx" -H "Content-Type: application/json" \
   -d '{"keyword":"deploy","match":"prefix","url":"http://10.0.0.5:3000/hook","secret":"my-hmac-key"}'
 ```
 
@@ -82,8 +82,8 @@ curl -X POST http://gw.example.com/api/v1/keywords \
 ```
 POST <url>
 Content-Type: application/json
-X-SSC-Timestamp: 1756543200
-X-SSC-Signature: <hex>
+X-MOE-Timestamp: 1756543200
+X-MOE-Signature: <hex>
 
 {"user_id":"wxid_xxx","account_id":"bot-1","keyword":"deploy","text":"deploy now","ts":1756543200123,"msg_id":"12345"}
 ```
@@ -96,7 +96,7 @@ X-SSC-Signature: <hex>
 | `text` | 用户输入的完整消息（已 trim） |
 | `ts` / `msg_id` | 网关时间戳与 iLink 消息号 |
 
-**签名**（设置了 `secret` 时）：`X-SSC-Signature = HMAC-SHA256(secret, "<ts>.<rawBody>")`，
+**签名**（设置了 `secret` 时）：`X-MOE-Signature = HMAC-SHA256(secret, "<ts>.<rawBody>")`，
 `rawBody` 为未经处理的原始请求体，建议同时校验时间戳防重放（网关侧窗口 5 分钟）。
 
 **应答约定**：

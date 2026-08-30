@@ -51,7 +51,7 @@ const KEY_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 
 export function generateSendkey(): string {
   const bytes = randomBytes(16);
-  let out = "SSC";
+  let out = "MOE";
   for (const b of bytes) out += KEY_ALPHABET[b % KEY_ALPHABET.length];
   return out;
 }

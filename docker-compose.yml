@@ -1,15 +1,15 @@
 services:
-  ssc:
+  servermoe:
     build: .
-    container_name: ssc-gateway
+    container_name: servermoe
     ports:
       - "8080:8080"
     environment:
-      SSC_SECRET: ${SSC_SECRET:-}
-      SSC_ADMIN_TOKEN: ${SSC_ADMIN_TOKEN:-}
+      MOE_SECRET: ${MOE_SECRET:-}
+      MOE_ADMIN_TOKEN: ${MOE_ADMIN_TOKEN:-}
       SSC_SEAT_LIMIT: ${SSC_SEAT_LIMIT:-5}
     volumes:
-      - ssc-data:/data
+      - servermoe-data:/data
     restart: unless-stopped
     logging:
       driver: json-file
@@ -18,4 +18,4 @@ services:
         max-file: "3"
 
 volumes:
-  ssc-data:
+  servermoe-data:

@@ -33,7 +33,7 @@ export function builtinReply(cmd: string, ctx: BuiltinContext): string | null {
 }
 
 function helpText(ctx: BuiltinContext): string {
-  const lines: string[] = ["SuperServerChan 指令", "", "help - 显示本帮助", "status - 网关与账号状态", ""];
+  const lines: string[] = ["ServerMoe 指令", "", "help - 显示本帮助", "status - 网关与账号状态", ""];
   const enabled = ctx.keywords.filter((k) => k.enabled);
   if (enabled.length === 0) {
     lines.push("尚未注册关键词。", "应用可通过 POST /api/v1/keywords 注册「关键词 → 回调」路由。");

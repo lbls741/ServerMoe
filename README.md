@@ -1,4 +1,4 @@
-# SuperServerChan（私有部署「超级 Server酱」）
+# ServerMoe（私有部署「超级 Server酱」）
 
 一个可私有部署的微信消息网关：对外提供 **ServerChan（Server酱）完全兼容的零 SDK 推送 API**，
 对内通过微信官方 OpenClaw 通道（ClawBot / 腾讯 iLink Bot API）送达你的微信聊天界面；
@@ -36,7 +36,7 @@ sudo bash scripts/deploy.sh update     # 更新代码并重启（数据保留）
 sudo bash scripts/deploy.sh uninstall  # 卸载（数据保留）
 ```
 
-细节见脚本头部注释。数据落在 `/var/lib/superserverchan`，配置在 `/etc/superserverchan.env`。
+细节见脚本头部注释。数据落在 `/var/lib/servermoe`，配置在 `/etc/servermoe.env`。
 
 ### 方式三：本地开发
 
@@ -55,7 +55,7 @@ bun run typecheck && bun run lint
 4. 用任意语言一行请求推送：
 
 ```bash
-curl "http://<host>:8080/SSCxxxxxxxx.send?title=构建完成&desp=**耗时** 3s"
+curl "http://<host>:8080/MOExxxxxxxx.send?title=构建完成&desp=**耗时** 3s"
 ```
 
 ## 反向控制（关键词路由）
@@ -67,7 +67,7 @@ curl "http://<host>:8080/SSCxxxxxxxx.send?title=构建完成&desp=**耗时** 3s"
 
 ## ServerChan（Server酱）迁移指南
 
-| Server酱 | SuperServerChan | 说明 |
+| Server酱 | ServerMoe | 说明 |
 |---|---|---|
 | `https://sctapi.ftqq.com/{SENDKEY}.send` | `http://<网关>/{sendkey}.send` | 只换域名，参数/响应结构一致 |
 | 免费 5 条/天 | 自托管默认 60 次/时（可调） | 限额在网关侧执行 |
@@ -87,7 +87,7 @@ curl "http://<host>:8080/SSCxxxxxxxx.send?title=构建完成&desp=**耗时** 3s"
 | `SSC_TEXT_CHUNK_LIMIT` | 3000 | 单条消息分块上限（1800–4000） |
 | `SSC_SEND_RATE_PER_HOUR` / `SSC_SEND_BURST` | 60 / 10 | 每 sendkey 限频 |
 | `SSC_SEAT_LIMIT` | 5 | 可绑定账号数上限 |
-| `SSC_LOG_LEVEL` / `SSC_BOT_AGENT` | info / SuperServerChan | 日志级别 / 出站观测标识 |
+| `SSC_LOG_LEVEL` / `SSC_BOT_AGENT` | info / ServerMoe | 日志级别 / 出站观测标识 |
 
 ## 运维与故障恢复
 
@@ -100,7 +100,7 @@ curl "http://<host>:8080/SSCxxxxxxxx.send?title=构建完成&desp=**耗时** 3s"
 | 二维码过期 | 自动刷新（≤3 次）；多次失败终止会话，重新发起 |
 | 日志保留 | push/inbound 日志默认保留 30 天，超时自动清理 |
 
-**备份**：备份 data 目录（Docker 卷 `ssc-data` / `/var/lib/superserverchan`）= 备份一切；
+**备份**：备份 data 目录（Docker 卷 `servermoe-data` / `/var/lib/servermoe`）= 备份一切；
 **恢复**到新机器后无需重新绑定。丢弃数据目录等于重置（需全部重新扫码）。
 
 **排查**：`docker logs ssc-gateway`（或 `journalctl -u ssc`）；管理页日志区可看路由与推送明细；

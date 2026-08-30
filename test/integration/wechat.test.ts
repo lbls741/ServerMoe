@@ -63,8 +63,8 @@ const wh = new Hono();
 wh.post("/hook", async (c) => {
   const raw = await c.req.text();
   const body = JSON.parse(raw) as Record<string, unknown>;
-  const ts = c.req.header("x-ssc-timestamp");
-  const sig = c.req.header("x-ssc-signature");
+  const ts = c.req.header("x-moe-timestamp");
+  const sig = c.req.header("x-moe-signature");
   whRecord.push({ body, sigOk: ts && sig ? hmacSignHex("whsec", `${ts}.${raw}`) === sig : null });
   return c.json({ reply: "已收到部署指令" });
 });
@@ -134,7 +134,7 @@ describe("绑定流程", () => {
     ).json()) as { code: number; accountId: string; sendkey: string };
     expect(cf.code).toBe(0);
     expect(cf.accountId).toBe("bot-1");
-    expect(cf.sendkey).toMatch(/^SSC[23456789A-HJ-NP-Za-km-z]{16}$/);
+    expect(cf.sendkey).toMatch(/^MOE[23456789A-HJ-NP-Za-km-z]{16}$/);
     sendkeyA = cf.sendkey;
 
     // monitor 已启动：notifystart 已发，首轮 getupdates 游标为空串
@@ -160,9 +160,9 @@ describe("绑定流程", () => {
       ownerUserId: "user-x",
       now: Date.now(),
     });
-    createSendkey(db, { keyHash: sha256Hex(core.salt + ":SSCXTESTTESTTEST1"), accountId: "bot-x", now: Date.now() });
+    createSendkey(db, { keyHash: sha256Hex(core.salt + ":MOEXTESTTESTTEST1"), accountId: "bot-x", now: Date.now() });
 
-    const r = await app.request("/SSCXTESTTESTTEST1.send", {
+    const r = await app.request("/MOEXTESTTESTTEST1.send", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ title: "排队消息", desp: "尚未预热" }),
@@ -213,7 +213,7 @@ describe("ServerChan 兼容推送", () => {
   });
 
   test("无效 sendkey → HTTP 400；缺 title → 400", async () => {
-    expect((await app.request("/SSCWRONGWRONGWRONGX.send?title=x")).status).toBe(400);
+    expect((await app.request("/MOEWRONGWRONGWRONGX.send?title=x")).status).toBe(400);
     expect((await app.request(`/${sendkeyA}.send?desp=no-title`)).status).toBe(400);
   });
 
@@ -368,7 +368,7 @@ describe("关键词路由（KWR）", () => {
     expect(lastSendText()).toContain("账号: bot-2");
 
     await pushInbound("help");
-    await waitFor(() => lastSendText().includes("SuperServerChan 指令"));
+    await waitFor(() => lastSendText().includes("ServerMoe 指令"));
 
     await pushInbound("随手打的废话");
     await waitFor(() => lastSendText().includes("未识别的指令"));

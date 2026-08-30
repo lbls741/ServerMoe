@@ -1,13 +1,13 @@
 # 关键词接收 Demo（Node.js / 零依赖）
 
-演示 SuperServerChan 双向消息的完整接入闭环：**注册关键词 → 接收微信消息 → 打印并回复**。
+演示 ServerMoe 双向消息的完整接入闭环：**注册关键词 → 接收微信消息 → 打印并回复**。
 单文件 `demo.js`，零 npm 依赖，只需 Node.js ≥ 18。
 
 ```
 你在微信里发「demo hello」
         │
         ▼
-微信 ClawBot ──► SuperServerChan 网关 ──(命中关键词, HMAC 签名)──► 本 demo (打印到终端)
+微信 ClawBot ──► ServerMoe 网关 ──(命中关键词, HMAC 签名)──► 本 demo (打印到终端)
                         ▲                                            │
                         └────────── {"reply":"demo 已收到…"} ─────────┘
                                           ▼
@@ -24,7 +24,7 @@
 
 ```bash
 GATEWAY=http://localhost:8080 \
-SENDKEY=SSCxxxxxxxxxxxxxxxx \
+SENDKEY=MOExxxxxxxxxxxxxxxx \
 KEYWORD=demo \
 WEBHOOK_SECRET=my-secret \
 node demo.js
@@ -50,7 +50,7 @@ demo 你好
 把脚本里 Server酱 的 base URL 换成本网关即可，参数完全一致：
 
 ```bash
-curl "http://localhost:8080/SSCxxxxxxxx.send?title=构建完成&desp=**耗时** 3s"
+curl "http://localhost:8080/MOExxxxxxxx.send?title=构建完成&desp=**耗时** 3s"
 ```
 
 ## API 速查
@@ -63,8 +63,8 @@ curl "http://localhost:8080/SSCxxxxxxxx.send?title=构建完成&desp=**耗时** 
 | 删除关键词 | `DELETE /api/v1/keywords/:id` | — |
 | 接收转发 | 应用 webhook 收 `POST` | body `{user_id, account_id, keyword, text, ts, msg_id}`；2xx 返回 `{"reply":"..."}` 即回发微信 |
 
-**签名**：注册时提供 `secret`，网关每次转发附 `X-SSC-Timestamp` 与
-`X-SSC-Signature = HMAC-SHA256(secret, "<ts>.<rawBody>")`，建议校验（本 demo 有完整示例）。
+**签名**：注册时提供 `secret`，网关每次转发附 `X-MOE-Timestamp` 与
+`X-MOE-Signature = HMAC-SHA256(secret, "<ts>.<rawBody>")`，建议校验（本 demo 有完整示例）。
 
 ## 常见问题
 

@@ -32,7 +32,7 @@ const app = createApp({ core, push: createPushService(core), wechat, limiter: cr
 const server = Bun.serve({ port: 0, fetch: app.fetch });
 const GATEWAY = `http://127.0.0.1:${server.port}`;
 
-const DEMO_KEY = "SSCDEMO0000000001";
+const DEMO_KEY = "MOEDEMO000000001";
 const DEMO_SECRET = "demosec";
 const DEMO_JS = join(import.meta.dir, "..", "..", "examples", "keyword-receiver", "demo.js");
 
@@ -114,7 +114,7 @@ describe("关键词接收 demo（examples/keyword-receiver）", () => {
       const ts = Math.floor(Date.now() / 1000);
       const res = await fetch(hookUrl.origin + "/hook", {
         method: "POST",
-        headers: { "content-type": "application/json", "x-ssc-timestamp": String(ts), "x-ssc-signature": hmacSignHex(DEMO_SECRET, `${ts}.${body}`) },
+        headers: { "content-type": "application/json", "x-moe-timestamp": String(ts), "x-moe-signature": hmacSignHex(DEMO_SECRET, `${ts}.${body}`) },
         body,
       });
       expect(res.status).toBe(200);
@@ -123,7 +123,7 @@ describe("关键词接收 demo（examples/keyword-receiver）", () => {
       // 伪造签名 → 401
       const bad = await fetch(hookUrl.origin + "/hook", {
         method: "POST",
-        headers: { "content-type": "application/json", "x-ssc-timestamp": String(ts), "x-ssc-signature": "deadbeef" },
+        headers: { "content-type": "application/json", "x-moe-timestamp": String(ts), "x-moe-signature": "deadbeef" },
         body,
       });
       expect(bad.status).toBe(401);

@@ -1,7 +1,7 @@
 {
-  "name": "ssc-keyword-receiver-demo",
+  "name": "servermoe-keyword-receiver-demo",
   "version": "1.0.0",
-  "description": "SuperServerChan 关键词接收 demo：注册关键词 → 接收微信消息 → 打印并回复（零依赖）",
+  "description": "ServerMoe 关键词接收 demo：注册关键词 → 接收微信消息 → 打印并回复（零依赖）",
   "private": true,
   "main": "demo.js",
   "scripts": {

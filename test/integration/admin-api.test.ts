@@ -37,7 +37,7 @@ createAccount(db, {
   ownerUserId: "user-a",
   now: Date.now(),
 });
-createSendkey(db, { keyHash: sha256Hex(core.salt + ":SSCOLDOLDOLDOLD001"), accountId: "bot-a", now: Date.now() });
+createSendkey(db, { keyHash: sha256Hex(core.salt + ":MOEOLDOLDOLD0001"), accountId: "bot-a", now: Date.now() });
 createKeyword(db, { accountId: "bot-a", keyword: "ping", matchMode: "exact", url: "https://example.com/hook", now: Date.now() });
 addPushLog(db, { ts: Date.now(), accountId: "bot-a", title: "测试推送", status: "sent" });
 addInboundLog(db, { ts: Date.now(), accountId: "bot-a", fromUserId: "user-a", text: "ping", action: "forwarded" });
@@ -60,9 +60,9 @@ describe("管理端点（M4）", () => {
     const res = await app.request("/api/v1/sessions/bot-a/reset-key", { method: "POST", headers: H });
     const j = (await res.json()) as { code: number; sendkey: string };
     expect(j.code).toBe(0);
-    expect(j.sendkey).toMatch(/^SSC[23456789A-HJ-NP-Za-km-z]{16}$/);
+    expect(j.sendkey).toMatch(/^MOE[23456789A-HJ-NP-Za-km-z]{16}$/);
 
-    expect(findActiveSendkey(db, sha256Hex(core.salt + ":SSCOLDOLDOLDOLD001"))).toBeUndefined();
+    expect(findActiveSendkey(db, sha256Hex(core.salt + ":MOEOLDOLDOLD0001"))).toBeUndefined();
     const fresh = findActiveSendkey(db, sha256Hex(core.salt + ":" + j.sendkey));
     expect(fresh?.accountId).toBe("bot-a");
   });

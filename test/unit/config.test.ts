@@ -13,10 +13,21 @@ describe("loadConfig", () => {
   });
 
   test("env overrides", () => {
-    const cfg = loadConfig({ SSC_PORT: "9000", SSC_DATA_DIR: "/tmp/x", SSC_LOG_LEVEL: "debug" });
+    const cfg = loadConfig({ MOE_PORT: "9000", MOE_DATA_DIR: "/tmp/x", MOE_LOG_LEVEL: "debug" });
     expect(cfg.port).toBe(9000);
     expect(cfg.dbPath).toBe("/tmp/x/gateway.db");
     expect(cfg.logLevel).toBe("debug");
+  });
+
+  test("旧 SSC_ 前缀兼容（已部署环境平滑迁移）", () => {
+    const cfg = loadConfig({ SSC_PORT: "9100", SSC_DATA_DIR: "/tmp/legacy" });
+    expect(cfg.port).toBe(9100);
+    expect(cfg.dbPath).toBe("/tmp/legacy/gateway.db");
+  });
+
+  test("MOE_ 优先于 SSC_", () => {
+    const cfg = loadConfig({ MOE_PORT: "9001", SSC_PORT: "9002" });
+    expect(cfg.port).toBe(9001);
   });
 
   test("invalid values rejected", () => {

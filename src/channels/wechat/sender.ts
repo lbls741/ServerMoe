@@ -15,7 +15,7 @@ export async function sendText(ctx: ApiCtx, to: string, text: string, contextTok
   if (!contextToken) {
     return { ok: false, reason: "WARMUP_REQUIRED", error: "missing context_token (user has not messaged the bot yet)" };
   }
-  const clientId = `ssc-${randomId()}`;
+  const clientId = `smoe-${randomId()}`;
   try {
     await sendMessage(ctx, {
       msg: {
