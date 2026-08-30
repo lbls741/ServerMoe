@@ -18,6 +18,7 @@ import { createLogger } from "./log.ts";
 import { createRateLimiter } from "./api/ratelimit.ts";
 import { createApp } from "./app.ts";
 import { createInboundRouter } from "./router/inbound.ts";
+import { createMailService } from "./mail/service.ts";
 
 const cfg = loadConfig();
 const log = createLogger(cfg.logLevel, { svc: "ssc" });
@@ -63,6 +64,9 @@ wechat.onWarmup = (accountId, peerUserId) => push.flushOutbox(accountId, peerUse
 // 入站路由接线：内置命令 / 关键词转发 / 未命中提醒
 const inboundRouter = createInboundRouter(core);
 wechat.onInbound = (accountId, fromUserId, text, msgId) => inboundRouter.handle(accountId, fromUserId, text, msgId);
+// 邮件桥（M5，可选）：未配置账号时不产生任何轮询
+core.mail = createMailService(core, push);
+core.mail.startAll();
 
 const limiter = createRateLimiter(cfg.sendRatePerHour, cfg.sendBurst);
 const app = createApp({ core, push, wechat, limiter });
@@ -99,6 +103,7 @@ async function shutdown(): Promise<void> {
   shuttingDown = true;
   log.info("shutting down");
   clearInterval(gcTimer);
+  await core.mail?.shutdown();
   await wechat.shutdown();
   server.stop(true);
   closeDb(db);

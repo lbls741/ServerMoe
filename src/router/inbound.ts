@@ -32,6 +32,16 @@ export function createInboundRouter(core: Core) {
       }
     };
 
+    // 0. 邮件桥命令（保留字 mail 前缀，优先于关键词匹配）
+    if (/^mail(?::|\s|$)/i.test(trimmed)) {
+      const text = core.mail
+        ? await core.mail.handleCommand(accountId, trimmed)
+        : "邮件桥未启用。";
+      const ok = await reply(text);
+      addInboundLog(db, { ts: now, accountId, fromUserId, text: trimmed, action: "builtin", reply: ok ? text : null });
+      return;
+    }
+
     // 1. 内置命令（保留字，exact 语义，最高优先级）
     const lower = trimmed.toLowerCase();
     if (isReserved(lower)) {

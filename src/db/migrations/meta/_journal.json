@@ -15,6 +15,13 @@
       "when": 1788050328203,
       "tag": "0001_huge_nightmare",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1788064269489,
+      "tag": "0002_common_johnny_storm",
+      "breakpoints": true
     }
   ]
 }

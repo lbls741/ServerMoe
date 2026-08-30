@@ -7,8 +7,7 @@ import QRCode from "qrcode";
 import type { WechatChannel } from "../channels/wechat/channel.ts";
 import { keywords as keywordsTable, outbox as outboxTable, pushLog } from "../db/schema.ts";
 import { encryptString, generateSendkey, safeEqual, sha256Hex } from "../crypto.ts";
-import type { Core } from "../core.ts";
-import type { PushService } from "../core/push.ts";
+import type { Core } from "../core.ts";import type { PushService } from "../core/push.ts";
 import { getAccount, listAccounts } from "../repo/accounts.ts";
 import { getLoginSession } from "../repo/loginSessions.ts";
 import { listRecentInbound, listRecentPush } from "../repo/logs.ts";
@@ -254,6 +253,47 @@ function mountAdmin(app: HonoApp, core: Core, wechat: WechatChannel): void {
       inbound: listRecentInbound(core.db, limit),
       push: listRecentPush(core.db, limit),
     });
+  });
+
+  // ---- 邮件桥（M5，可选功能） ----
+
+  app.get("/api/v1/admin/mail/:accountId", (c) => {
+    const accountId = c.req.param("accountId");
+    if (!getAccount(core.db, accountId)) return c.json({ code: 404, message: "account not found" }, 404);
+    return c.json({ code: 0, mail: core.mail?.view(accountId) ?? { enabled: false, configured: false } });
+  });
+
+  app.put("/api/v1/admin/mail/:accountId", async (c) => {
+    const accountId = c.req.param("accountId");
+    if (!getAccount(core.db, accountId)) return c.json({ code: 404, message: "account not found" }, 404);
+    if (!core.mail) return c.json({ code: 501, message: "邮件桥未装配" }, 200);
+    const body = (await c.req.json().catch(() => ({}))) as Parameters<NonNullable<Core["mail"]>["saveConfig"]>[1];
+    try {
+      core.mail.saveConfig(accountId, body);
+      return c.json({ code: 0 });
+    } catch (err) {
+      return c.json({ code: 400, message: String((err as Error).message) }, 200);
+    }
+  });
+
+  app.post("/api/v1/admin/mail/:accountId/poll-now", async (c) => {
+    const accountId = c.req.param("accountId");
+    if (!core.mail) return c.json({ code: 501, message: "邮件桥未装配" }, 200);
+    const newMail = await core.mail.pollOnce(accountId);
+    return c.json({ code: 0, newMail });
+  });
+
+  app.post("/api/v1/admin/mail/:accountId/send-test", async (c) => {
+    const accountId = c.req.param("accountId");
+    if (!core.mail) return c.json({ code: 501, message: "邮件桥未装配" }, 200);
+    const body = (await c.req.json().catch(() => ({}))) as { to?: string };
+    if (!body.to) return c.json({ code: 400, message: "to required" }, 400);
+    try {
+      await core.mail.sendTest(accountId, body.to);
+      return c.json({ code: 0, message: `测试邮件已发送至 ${body.to}` });
+    } catch (err) {
+      return c.json({ code: 502, message: `发送失败: ${String((err as Error).message).slice(0, 160)}` }, 200);
+    }
   });
 
   app.get("/api/v1/admin/overview", (c) => {

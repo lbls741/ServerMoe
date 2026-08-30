@@ -117,8 +117,7 @@ export const outbox = sqliteTable(
 );
 
 /** 绑定向导会话：iLink 二维码绑定流程的状态暂存 */
-export const loginSessions = sqliteTable("login_sessions", {
-  id: text("id").primaryKey(),
+export const loginSessions = sqliteTable("login_sessions", {  id: text("id").primaryKey(),
   createdAt: integer("created_at").notNull(),
   expiresAt: integer("expires_at").notNull(),
   status: text("status").notNull(), // wait|scaned|need_verifycode|verify_code_blocked|confirmed|expired|failed
@@ -132,4 +131,18 @@ export const loginSessions = sqliteTable("login_sessions", {
   baseUrl: text("base_url"),
   userId: text("user_id"),
   message: text("message"),
+});
+
+/** 邮件桥配置（每账号一份）。imap/smtp 凭据整体 AES 加密存储。 */
+export const mailConfigs = sqliteTable("mail_configs", {
+  accountId: text("account_id").primaryKey(),
+  imapEnc: text("imap_enc").notNull(),
+  smtpEnc: text("smtp_enc").notNull(),
+  from: text("from"),
+  pollSec: integer("poll_sec").notNull().default(60),
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+  uidValidity: text("uid_validity"),
+  lastUid: integer("last_uid"),
+  lastPollAt: integer("last_poll_at"),
+  lastError: text("last_error"),
 });

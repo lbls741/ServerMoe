@@ -16,11 +16,16 @@
   "dependencies": {
     "drizzle-orm": "^0.45.2",
     "hono": "^4.13.5",
+    "imapflow": "^1.7.6",
+    "mailparser": "^3.9.17",
+    "nodemailer": "^9.0.6",
     "qrcode": "^1.5.4",
     "zod": "^4.5.2"
   },
   "devDependencies": {
     "@types/bun": "^1.4.0",
+    "@types/mailparser": "^3.4.6",
+    "@types/nodemailer": "^8.0.1",
     "@types/qrcode": "^1.5.6",
     "drizzle-kit": "^0.31.10",
     "eslint": "^10.9.1",

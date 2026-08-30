@@ -101,6 +101,34 @@ export function renderIndex(): string {
 </section>
 
 <section>
+  <h2>邮件桥（可选）</h2>
+  <div class="row">
+    <span class="muted">账号</span><select id="mailAccount"></select>
+    <label><input type="checkbox" id="mailEnabled"> 启用</label>
+    <span class="muted">轮询间隔(秒)</span><input id="mailPoll" type="number" value="60" min="30" style="width:70px">
+  </div>
+  <p class="muted" style="margin:6px 0 2px">IMAP 收信</p>
+  <div class="row">
+    <input id="imapHost" placeholder="host" size="16"><input id="imapPort" type="number" value="993" style="width:70px">
+    <label><input type="checkbox" id="imapSecure" checked> SSL</label>
+    <input id="imapUser" placeholder="user" size="14"><input id="imapPass" type="password" placeholder="密码(留空保持)" size="14">
+  </div>
+  <p class="muted" style="margin:6px 0 2px">SMTP 发信</p>
+  <div class="row">
+    <input id="smtpHost" placeholder="host" size="16"><input id="smtpPort" type="number" value="465" style="width:70px">
+    <label><input type="checkbox" id="smtpSecure" checked> SSL</label>
+    <input id="smtpUser" placeholder="user" size="14"><input id="smtpPass" type="password" placeholder="密码(留空保持)" size="14">
+    <input id="smtpFrom" placeholder="发件人(可选)" size="14">
+  </div>
+  <div class="row">
+    <button id="mailSave">保存</button>
+    <button class="ghost" id="mailPollNow">立即收信</button>
+    <input id="mailTestTo" placeholder="测试收件人" size="18"><button class="ghost" id="mailTestSend">发测试邮件</button>
+  </div>
+  <div id="mailStatus" class="muted"></div>
+</section>
+
+<section>
   <h2>收发日志（最近 30 条）</h2>
   <button class="ghost" id="logRefresh">刷新</button>
   <table><tbody id="logIn"><tr><td class="muted">—</td></tr></tbody></table>
@@ -124,7 +152,63 @@ async function boot() {
   await loadAccounts();
   loadSettings();
   loadLogs();
+  loadMail();
 }
+
+async function loadMail(force) {
+  try {
+    const sel = $("mailAccount");
+    sel.innerHTML = accounts.map((s) => '<option value="' + s.accountId + '">' + s.accountId + '</option>').join("");
+    if (!accounts.length) { $("mailStatus").textContent = "暂无绑定账号"; return; }
+    if (force || !sel.value) sel.value = curAccount;
+    const accountId = sel.value;
+    const j = await (await api("/api/v1/admin/mail/" + accountId)).json();
+    const m = j.mail || {};
+    $("mailEnabled").checked = Boolean(m.enabled);
+    $("mailPoll").value = m.pollSec || 60;
+    const f = (prefix, cfg, passSet) => {
+      $(prefix + "Host").value = cfg && cfg.host ? cfg.host : "";
+      $(prefix + "Port").value = cfg && cfg.port ? cfg.port : "";
+      $(prefix + "Secure").checked = cfg && cfg.secure !== false;
+      $(prefix + "User").value = cfg && cfg.user ? cfg.user : "";
+      $(prefix + "Pass").value = "";
+      $(prefix + "Pass").placeholder = passSet ? "已保存(留空保持)" : "密码";
+    };
+    f("imap", m.imap, m.imap && m.imap.passSet);
+    f("smtp", m.smtp, m.smtp && m.smtp.passSet);
+    $("smtpFrom").value = m.from || "";
+    $("mailStatus").textContent = m.configured
+      ? ("最近收信 " + fmt(m.lastPollAt) + (m.lastError ? " · 错误: " + m.lastError : "") + " · 缓存 " + (m.cacheCount || 0) + " 封")
+      : "未配置";
+  } catch (e) { $("mailStatus").textContent = "加载失败: " + e; }
+}
+$("mailAccount").onchange = () => { loadMail(); };
+$("mailSave").onclick = async () => {
+  if (!$("imapHost").value.trim() && !$("smtpHost").value.trim()) { $("mailStatus").textContent = "请至少填写 IMAP 或 SMTP 主机"; return; }
+  const pass = (prefix) => { const v = $(prefix).value; return v ? v : undefined; };
+  const body = {
+    accountId: $("mailAccount").value,
+    enabled: $("mailEnabled").checked,
+    pollSec: Number($("mailPoll").value) || 60,
+    from: $("smtpFrom").value || undefined,
+    imap: { host: $("imapHost").value.trim(), port: Number($("imapPort").value) || 993, secure: $("imapSecure").checked, user: $("imapUser").value.trim(), pass: pass("imapPass") },
+    smtp: { host: $("smtpHost").value.trim(), port: Number($("smtpPort").value) || 465, secure: $("smtpSecure").checked, user: $("smtpUser").value.trim(), pass: pass("smtpPass") },
+  };
+  const j = await (await api("/api/v1/admin/mail/" + body.accountId, { method: "PUT", body: JSON.stringify(body) })).json();
+  $("mailStatus").textContent = j.code === 0 ? "已保存并生效" : "保存失败: " + j.message;
+  if (j.code === 0) loadMail();
+};
+$("mailPollNow").onclick = async () => {
+  const j = await (await api("/api/v1/admin/mail/" + $("mailAccount").value + "/poll-now", { method: "POST" })).json();
+  $("mailStatus").textContent = j.code === 0 ? "收信完成，新邮件 " + j.newMail + " 封" : "失败: " + j.message;
+  loadLogs();
+};
+$("mailTestSend").onclick = async () => {
+  const to = $("mailTestTo").value.trim();
+  if (!to) { $("mailStatus").textContent = "请填测试收件人"; return; }
+  const j = await (await api("/api/v1/admin/mail/" + $("mailAccount").value + "/send-test", { method: "POST", body: JSON.stringify({ to }) })).json();
+  $("mailStatus").textContent = j.code === 0 ? j.message : "失败: " + j.message;
+};
 
 async function loadAccounts() {
   try {
