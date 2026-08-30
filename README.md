@@ -1,4 +1,4 @@
-# ServerMoe（私有部署「超级 Server酱」）
+# ServerMoe（私有部署「Server酱」兼容）
 
 一个可私有部署的微信消息网关：对外提供 **ServerChan（Server酱）完全兼容的零 SDK 推送 API**，
 对内通过微信官方 OpenClaw 通道（ClawBot / 腾讯 iLink Bot API）送达你的微信聊天界面；
@@ -93,7 +93,8 @@ curl "http://<host>:8080/MOExxxxxxxx.send?title=构建完成&desp=**耗时** 3s"
 | 免费 5 条/天 | 自托管默认 60 次/时（可调） | 限额在网关侧执行 |
 | 单向推送 | 推送 + 关键词反向路由 + 邮件桥 | 新能力按需启用 |
 
-注意：官方 `serverchan-sdk` npm 包把 `https://sctapi.ftqq.com` **硬编码在源码里**，无法通过配置换 base URL——因此基于该 SDK 的应用需要改一行代码才能指向本网关；所谓「BASE_URL 支持」指的是向该 SDK 提交一个 PR，允许用环境变量（如 `SC_BASE_URL`）覆盖默认域名，被接受后这类应用就只需设一个环境变量即可迁移。其余所有自己拼 URL 的脚本不受影响，零改动。
+注意：官方 `serverchan-sdk` npm 包把 `https://sctapi.ftqq.com` **硬编码在源码里**，无法通过配置换 base URL——因此基于该 SDK 的应用需要改一行代码才能指向本网关
+如果你是普通用户，也许可以考虑使用本地代理，把请求导向本项目的实例。
 
 ## 配置项（环境变量）
 
@@ -148,18 +149,6 @@ scripts/deploy.sh            裸 Linux 一键部署
 ```
 
 技术栈：Bun + Hono + SQLite（bun:sqlite / Drizzle）+ TypeScript，全部依赖 MIT。
-
-## 版本发布（维护者）
-
-向 main 推送形如 `0.1.0` 或 `v0.1.0` 的 tag，GitHub Action（[.github/workflows/release.yml](.github/workflows/release.yml)）
-会自动执行：质量门禁 → 构建镜像 → 推送 `lbls741/servermoe:<tag>` 与 `:latest` 到 Docker Hub → 创建 GitHub Release。
-
-前置一次性配置（仓库密钥无法由他人代填）：
-
-1. Docker Hub → Account Settings → **Personal access tokens** → 生成一个 Read/Write 权限的 token；
-2. 本仓库 Settings → Secrets and variables → Actions → New repository secret，添加两条：
-   `DOCKERHUB_USERNAME` = 你的 Docker Hub 用户名；`DOCKERHUB_TOKEN` = 上一步的 token；
-3. `git push origin <tag>` 触发构建（Docker Hub 仓库会在首次推送时自动创建）。
 
 ## 开源协议
 
