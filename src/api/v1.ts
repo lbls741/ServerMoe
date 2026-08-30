@@ -6,11 +6,12 @@ import type { Context } from "hono";
 import QRCode from "qrcode";
 import type { WechatChannel } from "../channels/wechat/channel.ts";
 import { keywords as keywordsTable, outbox as outboxTable, pushLog } from "../db/schema.ts";
-import { encryptString, safeEqual, sha256Hex } from "../crypto.ts";
+import { encryptString, generateSendkey, safeEqual, sha256Hex } from "../crypto.ts";
 import type { Core } from "../core.ts";
 import type { PushService } from "../core/push.ts";
 import { deleteAccount, getAccount, listAccounts } from "../repo/accounts.ts";
 import { getLoginSession } from "../repo/loginSessions.ts";
+import { listRecentInbound, listRecentPush } from "../repo/logs.ts";
 import {
   createKeyword,
   deleteKeyword,
@@ -21,7 +22,8 @@ import {
   type MatchMode,
 } from "../repo/keywords.ts";
 import { deleteAccountPeers, listPeers } from "../repo/peers.ts";
-import { findActiveSendkey, listSendkeys, revokeSendkeys } from "../repo/sendkeys.ts";
+import { getSetting, setSetting } from "../repo/settings.ts";
+import { createSendkey, findActiveSendkey, listSendkeys, revokeSendkeys } from "../repo/sendkeys.ts";
 import { isValidRegex } from "../router/matcher.ts";
 import { isReserved } from "../router/builtins.ts";
 import { bearerToken, requireAdmin } from "./auth.ts";
@@ -201,6 +203,48 @@ function mountAdmin(app: HonoApp, core: Core, wechat: WechatChannel): void {
     deleteAccount(core.db, id);
     core.log.info("account unbound", { accountId: id });
     return c.json({ code: 0, message: "unbound" });
+  });
+
+  app.post("/api/v1/sessions/:id/reset-key", async (c) => {
+    const id = c.req.param("id");
+    if (!getAccount(core.db, id)) return c.json({ code: 404, message: "account not found" }, 404);
+    const now = Date.now();
+    revokeSendkeys(core.db, id, now);
+    const key = generateSendkey();
+    createSendkey(core.db, { keyHash: sha256Hex(core.salt + ":" + key), accountId: id, now });
+    core.log.info("sendkey reset", { accountId: id });
+    return c.json({ code: 0, sendkey: key });
+  });
+
+  app.get("/api/v1/admin/settings", (c) => {
+    return c.json({
+      code: 0,
+      no_match_remind: getSetting(core.db, "no_match_remind") ?? "1",
+      no_match_text: getSetting(core.db, "no_match_text") ?? "",
+    });
+  });
+
+  app.put("/api/v1/admin/settings", async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as { no_match_remind?: string; no_match_text?: string };
+    if (body.no_match_remind !== undefined) {
+      if (body.no_match_remind !== "0" && body.no_match_remind !== "1") {
+        return c.json({ code: 400, message: "no_match_remind 只能是 0 或 1" }, 400);
+      }
+      setSetting(core.db, "no_match_remind", body.no_match_remind);
+    }
+    if (body.no_match_text !== undefined) {
+      setSetting(core.db, "no_match_text", body.no_match_text.slice(0, 200));
+    }
+    return c.json({ code: 0 });
+  });
+
+  app.get("/api/v1/admin/logs", (c) => {
+    const limit = Math.min(100, Math.max(1, Number(c.req.query("limit") ?? 30)));
+    return c.json({
+      code: 0,
+      inbound: listRecentInbound(core.db, limit),
+      push: listRecentPush(core.db, limit),
+    });
   });
 
   app.get("/api/v1/admin/overview", (c) => {

@@ -83,7 +83,7 @@ export function createInboundRouter(core: Core) {
     // 3. 未命中 → 可配置提醒（settings.no_match_remind = "0" 关闭）
     addInboundLog(db, { ts: now, accountId, fromUserId, text: trimmed, action: "no_match" });
     if (getSetting(db, "no_match_remind") !== "0") {
-      const remindText = getSetting(db, "no_match_text") ?? DEFAULT_NO_MATCH_TEXT;
+      const remindText = getSetting(db, "no_match_text") || DEFAULT_NO_MATCH_TEXT;
       await reply(remindText).catch(() => {});
     }
   }

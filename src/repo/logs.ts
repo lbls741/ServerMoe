@@ -1,6 +1,9 @@
-import { lt } from "drizzle-orm";
+import { desc, lt } from "drizzle-orm";
 import type { Db } from "../db/index.ts";
 import { inboundLog, pushLog } from "../db/schema.ts";
+
+export type PushLogRow = typeof pushLog.$inferSelect;
+export type InboundLogRow = typeof inboundLog.$inferSelect;
 
 export interface PushLogEntry {
   ts: number;
@@ -66,4 +69,12 @@ export function addInboundLog(db: Db, e: InboundLogEntry): void {
 export function gcLogs(db: Db, olderThanTs: number): void {
   db.delete(pushLog).where(lt(pushLog.ts, olderThanTs)).run();
   db.delete(inboundLog).where(lt(inboundLog.ts, olderThanTs)).run();
+}
+
+export function listRecentPush(db: Db, limit = 30): PushLogRow[] {
+  return db.select().from(pushLog).orderBy(desc(pushLog.id)).limit(limit).all();
+}
+
+export function listRecentInbound(db: Db, limit = 30): InboundLogRow[] {
+  return db.select().from(inboundLog).orderBy(desc(inboundLog.id)).limit(limit).all();
 }
