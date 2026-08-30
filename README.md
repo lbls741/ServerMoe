@@ -28,8 +28,8 @@
 ### 方式一：Docker Hub 拉取（最快）
 
 ```bash
-docker pull lbls741/servermoe:0.1.0
-docker run -d --name servermoe -p 8080:8080 -v servermoe-data:/data lbls741/servermoe:0.1.0
+docker pull lbls741/servermoe:latest
+docker run -d --name servermoe -p 8080:8080 -v servermoe-data:/data lbls741/servermoe:latest
 curl http://localhost:8080/healthz
 ```
 
