@@ -128,4 +128,15 @@ docs/integration.md          反向控制接入文档
 scripts/deploy.sh            裸 Linux 一键部署
 ```
 
-技术栈：Bun + Hono + SQLite（bun:sqlite / Drizzle）+ TypeScript，全部依赖 MIT。详见 `package.json`。
+技术栈：Bun + Hono + SQLite（bun:sqlite / Drizzle）+ TypeScript，全部依赖 MIT。
+
+## 开源协议
+
+本项目以 **GPL-3.0-or-later** 发布（全文见 [LICENSE](LICENSE)）。运行时第三方组件均为宽松许可
+（MIT / ISC / BSD-2/3 / Apache-2.0 / MIT-0），声明清单见
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)（由 `scripts/list-licenses.mjs` 自动生成，升级依赖后请重新生成）。
+以 Docker 镜像等二进制形式分发时，请一并携带 `LICENSE` 与 `THIRD-PARTY-NOTICES.md` 并保持源码可获取。
+
+**免责声明**：本项目与腾讯、微信及其生态无任何隶属或合作关系；本项目不实现也不逆向微信客户端协议，
+消息通道基于微信官方 OpenClaw 插件公开的 MIT 接口契约自研实现。使用本项目请自行遵守微信用户协议与
+相关服务条款，因使用不当导致的账号限制或风险由使用者自行承担。

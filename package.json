@@ -1,7 +1,8 @@
 {
-  "name": "super-serverchan",
-  "version": "0.1.0",
-  "description": "私有部署的超级 Server酱：iLink 通道网关，ServerChan 兼容推送 + 关键词路由",
+  "name": "servermoe",
+  "version": "1.0.0",
+  "description": "ServerMoe：私有部署微信消息网关，ServerChan 兼容推送 + 关键词路由",
+  "license": "GPL-3.0-or-later",
   "private": true,
   "type": "module",
   "module": "src/index.ts",

@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "super-serverchan",
+      "name": "servermoe",
       "dependencies": {
         "drizzle-orm": "^0.45.2",
         "hono": "^4.13.5",

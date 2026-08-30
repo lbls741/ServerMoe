@@ -2,6 +2,7 @@
   "name": "servermoe-keyword-receiver-demo",
   "version": "1.0.0",
   "description": "ServerMoe 关键词接收 demo：注册关键词 → 接收微信消息 → 打印并回复（零依赖）",
+  "license": "GPL-3.0-or-later",
   "private": true,
   "main": "demo.js",
   "scripts": {
