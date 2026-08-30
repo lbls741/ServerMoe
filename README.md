@@ -7,6 +7,17 @@
 
 > 单二进制/单容器运行，数据全在本机。个人自用、低频通知场景设计。
 
+<p align="center">
+  <!-- 图 1：架构图。把图片放到 docs/images/architecture.png 后取消下一行注释 -->
+  <!-- <img src="docs/images/architecture.png" alt="ServerMoe 架构" width="760"> -->
+  <b>📷 架构图占位</b>（docs/images/architecture.png）
+</p>
+<p align="center">
+  <!-- 图 2：管理页截图。把图片放到 docs/images/screenshot.png 后取消下一行注释 -->
+  <!-- <img src="docs/images/screenshot.png" alt="ServerMoe 管理页" width="760"> -->
+  <b>📷 管理页截图占位</b>（docs/images/screenshot.png）
+</p>
+
 ## 特性
 
 - **零 SDK 推送**：`/{sendkey}.send`，与 Server酱 参数和响应结构兼容，老应用换 base URL 即迁移
@@ -18,15 +29,24 @@
 
 ## 快速开始
 
-### 方式一：Docker（推荐）
+### 方式一：Docker Hub 拉取（最快）
 
 ```bash
-cp .env.example .env   # 填 SSC_SECRET / SSC_ADMIN_TOKEN（或留空自动生成后从日志取）
-docker compose up -d --build
+docker pull lbls741/servermoe:0.1.0
+docker run -d --name servermoe -p 8080:8080 -v servermoe-data:/data lbls741/servermoe:0.1.0
 curl http://localhost:8080/healthz
 ```
 
-### 方式二：裸 Linux 一键部署
+管理页 `http://localhost:8080/`；未传 `MOE_ADMIN_TOKEN` 时首启会自动生成，`docker logs servermoe` 查看。
+
+### 方式二：本地构建（Docker Compose）
+
+```bash
+cp .env.example .env   # 填 MOE_SECRET / MOE_ADMIN_TOKEN（或留空自动生成后从日志取）
+docker compose up -d --build
+```
+
+### 方式三：裸 Linux 一键部署
 
 把项目目录上传到服务器，然后：
 
@@ -38,12 +58,12 @@ sudo bash scripts/deploy.sh uninstall  # 卸载（数据保留）
 
 细节见脚本头部注释。数据落在 `/var/lib/servermoe`，配置在 `/etc/servermoe.env`。
 
-### 方式三：本地开发
+### 方式四：本地开发
 
 ```bash
 bun install
 bun run dev            # http://localhost:8080（--hot 热重载）
-bun test test/         # 69 项测试
+bun test test/         # 71 项测试
 bun run typecheck && bun run lint
 ```
 
@@ -73,8 +93,7 @@ curl "http://<host>:8080/MOExxxxxxxx.send?title=构建完成&desp=**耗时** 3s"
 | 免费 5 条/天 | 自托管默认 60 次/时（可调） | 限额在网关侧执行 |
 | 单向推送 | 推送 + 关键词反向路由 + 邮件桥 | 新能力按需启用 |
 
-注意：官方 `serverchan-sdk` npm 包硬编码了域名，无法换 base URL；使用该 SDK 的脚本需改一行
-`fetch`（或等我们后续提交的 BASE_URL 支持），其余所有直接拼 URL 的脚本零改动。
+注意：官方 `serverchan-sdk` npm 包把 `https://sctapi.ftqq.com` **硬编码在源码里**，无法通过配置换 base URL——因此基于该 SDK 的应用需要改一行代码才能指向本网关；所谓「BASE_URL 支持」指的是向该 SDK 提交一个 PR，允许用环境变量（如 `SC_BASE_URL`）覆盖默认域名，被接受后这类应用就只需设一个环境变量即可迁移。其余所有自己拼 URL 的脚本不受影响，零改动。
 
 ## 配置项（环境变量）
 
@@ -129,6 +148,18 @@ scripts/deploy.sh            裸 Linux 一键部署
 ```
 
 技术栈：Bun + Hono + SQLite（bun:sqlite / Drizzle）+ TypeScript，全部依赖 MIT。
+
+## 版本发布（维护者）
+
+向 main 推送形如 `0.1.0` 或 `v0.1.0` 的 tag，GitHub Action（[.github/workflows/release.yml](.github/workflows/release.yml)）
+会自动执行：质量门禁 → 构建镜像 → 推送 `lbls741/servermoe:<tag>` 与 `:latest` 到 Docker Hub → 创建 GitHub Release。
+
+前置一次性配置（仓库密钥无法由他人代填）：
+
+1. Docker Hub → Account Settings → **Personal access tokens** → 生成一个 Read/Write 权限的 token；
+2. 本仓库 Settings → Secrets and variables → Actions → New repository secret，添加两条：
+   `DOCKERHUB_USERNAME` = 你的 Docker Hub 用户名；`DOCKERHUB_TOKEN` = 上一步的 token；
+3. `git push origin <tag>` 触发构建（Docker Hub 仓库会在首次推送时自动创建）。
 
 ## 开源协议
 
