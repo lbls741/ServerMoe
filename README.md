@@ -8,14 +8,10 @@
 > 单二进制/单容器运行，数据全在本机。个人自用、低频通知场景设计。
 
 <p align="center">
-  <!-- 图 1：架构图。把图片放到 docs/images/architecture.png 后取消下一行注释 -->
-  <!-- <img src="docs/images/architecture.png" alt="ServerMoe 架构" width="760"> -->
-  <b>📷 架构图占位</b>（docs/images/architecture.png）
+  <img src="docs/images/client.jpg" alt="手机微信效果" width="760">
 </p>
 <p align="center">
-  <!-- 图 2：管理页截图。把图片放到 docs/images/screenshot.png 后取消下一行注释 -->
-  <!-- <img src="docs/images/screenshot.png" alt="ServerMoe 管理页" width="760"> -->
-  <b>📷 管理页截图占位</b>（docs/images/screenshot.png）
+  <img src="docs/images/screenshot.jpg" alt="ServerMoe 管理页" width="760">
 </p>
 
 ## 特性
