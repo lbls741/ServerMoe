@@ -13,7 +13,7 @@ COPY LICENSE THIRD-PARTY-NOTICES.md ./
 LABEL org.opencontainers.image.title="ServerMoe" \
       org.opencontainers.image.licenses="GPL-3.0-or-later" \
       org.opencontainers.image.description="私有部署微信消息网关（ServerChan 兼容推送 + 关键词路由）" \
-      org.opencontainers.image.source="https://github.com/YOUR_ACCOUNT/servermoe"
+      org.opencontainers.image.source="https://github.com/lbls741/SeverMoe"
 VOLUME /data
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s \
