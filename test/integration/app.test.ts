@@ -36,8 +36,9 @@ describe("http skeleton", () => {
     expect(((await res.json()) as { status: string }).status).toBe("ok");
   });
 
-  test("GET /statusz lists accounts (empty at first)", async () => {
-    const res = await app.request("/statusz");
+  test("GET /statusz 需要管理鉴权（账号信息不向未授权者泄露）", async () => {
+    expect((await app.request("/statusz")).status).toBe(401);
+    const res = await app.request("/statusz", { headers: { authorization: "Bearer test-admin" } });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { accounts: unknown[] };
     expect(body.accounts).toEqual([]);

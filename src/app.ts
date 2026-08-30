@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { secureHeaders } from "hono/secure-headers";
+import { requireAdmin } from "./api/auth.ts";
 import type { Core } from "./core.ts";
 import type { PushService } from "./core/push.ts";
 import type { RateLimiter } from "./api/ratelimit.ts";
@@ -22,7 +23,8 @@ export function createApp(deps: AppDeps): Hono {
 
   app.get("/healthz", (c) => c.json({ status: "ok" }));
 
-  app.get("/statusz", (c) => {
+  // 账号信息属敏感数据，与 /api/v1/sessions 同等鉴权；探针请使用 /healthz
+  app.get("/statusz", requireAdmin(deps.core), (c) => {
     const accounts = listAccounts(deps.core.db).map((a) => ({
       id: a.id,
       label: a.label,
