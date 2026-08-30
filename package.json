@@ -1,0 +1,30 @@
+{
+  "name": "super-serverchan",
+  "version": "0.1.0",
+  "description": "私有部署的超级 Server酱：iLink 通道网关，ServerChan 兼容推送 + 关键词路由",
+  "private": true,
+  "type": "module",
+  "module": "src/index.ts",
+  "scripts": {
+    "dev": "bun run --hot src/index.ts",
+    "start": "bun run src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src test",
+    "test": "bun test test/",
+    "db:generate": "drizzle-kit generate"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.45.2",
+    "hono": "^4.13.5",
+    "qrcode": "^1.5.4",
+    "zod": "^4.5.2"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.0",
+    "@types/qrcode": "^1.5.6",
+    "drizzle-kit": "^0.31.10",
+    "eslint": "^10.9.1",
+    "typescript": "~5.9.0",
+    "typescript-eslint": "^8.68.0"
+  }
+}

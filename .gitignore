@@ -1,0 +1,12 @@
+node_modules/
+dist/
+data/
+research/
+*.db
+*.db-wal
+*.db-shm
+.env
+.env.local
+*.log
+.DS_Store
+.zcode/
