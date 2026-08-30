@@ -44,7 +44,7 @@ export function renderIndex(): string {
 </section>
 
 <section>
-  <h2>账号状态</h2>
+  <h2>账号状态 <span class="muted" id="seatInfo"></span></h2>
   <table><tbody id="accounts"><tr><td class="muted">加载中…</td></tr></tbody></table>
   <div id="keyOut"></div>
 </section>
@@ -132,6 +132,7 @@ async function loadAccounts() {
     if (r.status === 401) { $("accounts").innerHTML = '<tr><td class="err">令牌无效（401）</td></tr>'; return; }
     const j = await r.json();
     accounts = j.sessions || [];
+    $("seatInfo").textContent = j.seats ? "已用 " + j.seats.used + "/" + j.seats.limit + " 席位" : "";
     $("accounts").innerHTML = accounts.map((s) =>
       '<tr><td><b>' + s.accountId + '</b><br><span class="muted">' + s.baseUrl + '</span></td>' +
       '<td><span class="badge ' + s.status + '">' + s.status + '</span><br><span class="muted">入站 ' + fmt(s.lastInboundAt) + '</span></td>' +

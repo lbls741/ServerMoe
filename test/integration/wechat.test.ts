@@ -14,8 +14,9 @@ import type { Core } from "../../src/core.ts";
 import { hmacSignHex } from "../../src/crypto.ts";
 import { closeDb, openDb } from "../../src/db/index.ts";
 import { createLogger } from "../../src/log.ts";
-import { getAccount, createAccount } from "../../src/repo/accounts.ts";
+import { getAccount, createAccount, listAccounts, updateAccountStatus } from "../../src/repo/accounts.ts";
 import { getLoginSession } from "../../src/repo/loginSessions.ts";
+import { listKeywords } from "../../src/repo/keywords.ts";
 import { getPeerToken, upsertPeer } from "../../src/repo/peers.ts";
 import { listPendingOutbox } from "../../src/repo/outbox.ts";
 import { createInboundRouter } from "../../src/router/inbound.ts";
@@ -97,6 +98,14 @@ function waitFor(fn: () => boolean, timeoutMs = 4000, stepMs = 25, label = "?"):
       setTimeout(tick, stepMs);
     };
     tick();
+  });
+}
+
+function registerKeyword(auth: string, body: Record<string, unknown>) {
+  return app.request("/api/v1/keywords", {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${auth}` },
+    body: JSON.stringify(body),
   });
 }
 
@@ -286,14 +295,6 @@ describe("多登录与生命周期", () => {
 });
 
 describe("关键词路由（KWR）", () => {
-  function registerKeyword(auth: string, body: Record<string, unknown>) {
-    return app.request("/api/v1/keywords", {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${auth}` },
-      body: JSON.stringify(body),
-    });
-  }
-
   async function pushInbound(text: string, ctx = "ctx-2b", msgId?: number, from = "user-2"): Promise<void> {
     const msg: WeixinMessage = { message_type: MessageType.USER, from_user_id: from, item_list: [{ type: MessageItemType.TEXT, text_item: { text } }], context_token: ctx };
     if (msgId !== undefined) msg.message_id = msgId;
@@ -396,5 +397,93 @@ describe("关键词路由（KWR）", () => {
     await new Promise((r) => setTimeout(r, 200));
     expect(whRecord.length).toBe(after.calls);
     expect(mock.record.sends.length).toBe(after.sends);
+  });
+});
+
+describe("多用户（M6）", () => {
+  test("并发隔离：双 monitor 各自消费定向入站流，路由互不串扰", async () => {
+    await updateAccountStatus(db, "bot-1", "active", Date.now());
+    await wechat.startAccount("bot-1"); // 重启 bot-1 monitor（此前为隔离测试已停止）
+
+    await (await registerKeyword(sendkeyA, { keyword: "k1", match: "prefix", url: whUrl("/hook") })).json();
+    await (await registerKeyword(sendkeyB, { keyword: "k2", match: "prefix", url: whUrl("/hook") })).json();
+    const callsBefore = whRecord.length;
+
+    mock.scenario.updates.push(
+      { msgs: [userMsg("user-1", "ctx-1m", "k1 hello")], accountId: "bot-1" },
+      { msgs: [userMsg("user-2", "ctx-2m", "k2 hello")], accountId: "bot-2" },
+    );
+    await waitFor(() => whRecord.length >= callsBefore + 2, 4000, 25, "both tagged steps forwarded");
+    const bodies = whRecord.slice(callsBefore).map((c) => c.body);
+    expect(bodies.find((b) => b.keyword === "k1")?.account_id).toBe("bot-1");
+    expect(bodies.find((b) => b.keyword === "k2")?.account_id).toBe("bot-2");
+
+    await waitFor(
+      () =>
+        mock.record.sends.some((s) => s.msg.to_user_id === "user-1" && (s.msg.item_list?.[0]?.text_item?.text ?? "").includes("已收到部署指令")) &&
+        mock.record.sends.some((s) => s.msg.to_user_id === "user-2" && (s.msg.item_list?.[0]?.text_item?.text ?? "").includes("已收到部署指令")),
+      4000,
+      25,
+      "replies to both users",
+    );
+  });
+
+  test("推送隔离：sendkey A/B 各达其主", async () => {
+    const before = mock.record.sends.length;
+    await app.request(`/${sendkeyA}.send?title=to-a`);
+    await app.request(`/${sendkeyB}.send?title=to-b`);
+    await waitFor(() => mock.record.sends.length >= before + 2, 4000, 25, "both pushes delivered");
+    const targets = mock.record.sends.slice(before).map((s) => s.msg.to_user_id);
+    expect(targets).toContain("user-1");
+    expect(targets).toContain("user-2");
+  });
+
+  test("席位上限：占满后拒绝新登录", async () => {
+    expect(listAccounts(db).length).toBe(2);
+    cfg.seatLimit = 2;
+    try {
+      const r = await app.request("/api/v1/login/start", { method: "POST", headers: H });
+      expect(r.status).toBe(409);
+      const j = (await r.json()) as { code: number; message: string };
+      expect(j.message).toContain("席位已满");
+      expect(listAccounts(db).length).toBe(2);
+    } finally {
+      cfg.seatLimit = 5;
+    }
+  });
+
+  test("同用户重绑：旧账号随关键词/sendkey 一并清理，新账号无缝接管", async () => {
+    const stops = mock.record.notifyStops;
+    mock.scenario.qrStatus.push(
+      { status: "wait" },
+      { status: "confirmed", bot_token: "tok-2b", ilink_bot_id: "bot-2b", baseurl: `http://127.0.0.1:${mock.port}`, ilink_user_id: "user-2" },
+    );
+    const r1 = await app.request("/api/v1/login/start", { method: "POST", headers: H });
+    const j1 = (await r1.json()) as { sessionId: string };
+    await waitFor(() => getLoginSession(db, j1.sessionId)?.status === "confirmed", 4000, 25, "bot-2b confirmed");
+    const cf = (await (
+      await app.request("/api/v1/login/confirm", { method: "POST", headers: JSON_H, body: JSON.stringify({ sessionId: j1.sessionId }) })
+    ).json()) as { code: number; accountId: string; sendkey: string };
+    expect(cf.code).toBe(0);
+    expect(cf.accountId).toBe("bot-2b");
+
+    await waitFor(() => getAccount(db, "bot-2") === undefined, 4000, 25, "stale account removed");
+    expect(getAccount(db, "bot-2b")).toBeDefined();
+    expect(listKeywords(db, "bot-2")).toHaveLength(0);
+    expect(mock.record.notifyStops).toBeGreaterThan(stops);
+    expect((await app.request(`/${sendkeyB}.send?title=x`)).status).toBe(400); // 旧 sendkey 已吊销
+
+    // 新会话需重新预热：推送先排队（450），user-2 预热后 outbox 自动补发
+    const pushed = await app.request(`/${cf.sendkey}.send?title=hi-new`, { headers: { "content-type": "application/json" }, body: JSON.stringify({ title: "hi-new" }) });
+    expect(((await pushed.json()) as { code: number }).code).toBe(450);
+    mock.scenario.updates.push({ msgs: [userMsg("user-2", "ctx-2b-warm", "hello")], accountId: "bot-2b" });
+    await waitFor(
+      () => mock.record.sends.some((s) => s.msg.to_user_id === "user-2" && (s.msg.item_list?.[0]?.text_item?.text ?? "").includes("hi-new")),
+      4000,
+      25,
+      "outbox flushed after re-bind warmup",
+    );
+    const flushed = mock.record.sends.find((s) => (s.msg.item_list?.[0]?.text_item?.text ?? "").includes("hi-new"))!;
+    expect(flushed.msg.to_user_id).toBe("user-2");
   });
 });

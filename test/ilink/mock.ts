@@ -8,6 +8,8 @@ export interface UpdateStep {
   errcode?: number;
   errmsg?: string;
   newBuf?: string;
+  /** 定向投递：仅推给该账号的长轮询（多账号并发隔离测试用） */
+  accountId?: string;
 }
 export interface SendStep {
   ret?: number;
@@ -38,6 +40,8 @@ export function startMockIlink(factory: (port: number) => MockScenario): MockIli
   // eslint-disable-next-line prefer-const
   let scenario: MockScenario;
   let lastBuf = "";
+  // bot_token → ilink_bot_id 映射（从 confirmed 响应自动登记），用于定向投递
+  const tokenToBot = new Map<string, string>();
   const app = new Hono();
 
   app.post("/ilink/bot/get_bot_qrcode", (c) =>
@@ -47,14 +51,21 @@ export function startMockIlink(factory: (port: number) => MockScenario): MockIli
   app.get("/ilink/bot/get_qrcode_status", (c) => {
     record.qrPolls.push(c.req.query("verify_code") ?? "");
     const step = scenario.qrStatus.shift() ?? scenario.qrStatus[scenario.qrStatus.length - 1] ?? { status: "wait" as const };
+    if (step.status === "confirmed" && step.bot_token && step.ilink_bot_id) {
+      tokenToBot.set(step.bot_token, step.ilink_bot_id);
+    }
     return c.json(step);
   });
 
   app.post("/ilink/bot/getupdates", async (c) => {
     const body = (await c.req.json()) as { get_updates_buf?: string };
     record.updateBufs.push(body.get_updates_buf ?? "");
-    if (scenario.updates.length > 0) {
-      const step = scenario.updates.shift()!;
+    // 定向投递：按调用方 bot_token 找到所属账号，只消费该账号的步骤（无标记步骤任何账号可消费）
+    const auth = c.req.header("authorization") ?? "";
+    const targetBot = tokenToBot.get(auth.replace(/^Bearer\s+/i, ""));
+    const idx = scenario.updates.findIndex((s) => !s.accountId || (targetBot && s.accountId === targetBot));
+    if (idx >= 0) {
+      const step = scenario.updates.splice(idx, 1)[0]!;
       if (step.newBuf !== undefined) lastBuf = step.newBuf;
       if ((step.ret ?? 0) !== 0 || (step.errcode ?? 0) !== 0) {
         return c.json({ ret: step.ret ?? 0, errcode: step.errcode, errmsg: step.errmsg, msgs: [] });

@@ -9,7 +9,7 @@ import { keywords as keywordsTable, outbox as outboxTable, pushLog } from "../db
 import { encryptString, generateSendkey, safeEqual, sha256Hex } from "../crypto.ts";
 import type { Core } from "../core.ts";
 import type { PushService } from "../core/push.ts";
-import { deleteAccount, getAccount, listAccounts } from "../repo/accounts.ts";
+import { getAccount, listAccounts } from "../repo/accounts.ts";
 import { getLoginSession } from "../repo/loginSessions.ts";
 import { listRecentInbound, listRecentPush } from "../repo/logs.ts";
 import {
@@ -21,7 +21,7 @@ import {
   setKeywordEnabled,
   type MatchMode,
 } from "../repo/keywords.ts";
-import { deleteAccountPeers, listPeers } from "../repo/peers.ts";
+import { listPeers } from "../repo/peers.ts";
 import { getSetting, setSetting } from "../repo/settings.ts";
 import { createSendkey, findActiveSendkey, listSendkeys, revokeSendkeys } from "../repo/sendkeys.ts";
 import { isValidRegex } from "../router/matcher.ts";
@@ -132,6 +132,14 @@ function mountAdmin(app: HonoApp, core: Core, wechat: WechatChannel): void {
   app.use("/api/v1/admin/*", requireAdmin(core));
 
   app.post("/api/v1/login/start", async (c) => {
+    // 席位控制（R4）：绑定数量达到上限时拒绝新登录
+    const used = listAccounts(core.db).length;
+    if (used >= core.cfg.seatLimit) {
+      return c.json(
+        { code: 409, message: `绑定席位已满（${used}/${core.cfg.seatLimit}）。请先解绑账号，或调大 SSC_SEAT_LIMIT。` },
+        409,
+      );
+    }
     const r = await wechat.startLogin();
     return c.json({ code: 0, ...r });
   });
@@ -191,16 +199,17 @@ function mountAdmin(app: HonoApp, core: Core, wechat: WechatChannel): void {
       activeSendkeys: listSendkeys(core.db, a.id).filter((k) => !k.revokedAt).length,
       createdAt: a.createdAt,
     }));
-    return c.json({ code: 0, sessions });
+    return c.json({
+      code: 0,
+      sessions,
+      seats: { used: sessions.length, limit: core.cfg.seatLimit },
+    });
   });
 
   app.delete("/api/v1/sessions/:id", async (c) => {
     const id = c.req.param("id");
     if (!getAccount(core.db, id)) return c.json({ code: 404, message: "account not found" }, 404);
-    await wechat.stopAccount(id, "unbind");
-    revokeSendkeys(core.db, id, Date.now());
-    deleteAccountPeers(core.db, id);
-    deleteAccount(core.db, id);
+    await wechat.removeAccount(id);
     core.log.info("account unbound", { accountId: id });
     return c.json({ code: 0, message: "unbound" });
   });

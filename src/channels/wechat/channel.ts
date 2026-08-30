@@ -3,9 +3,11 @@ import type { Channel, ChannelAccountView, SendResult } from "../types.ts";
 import type { Config } from "../../config.ts";
 import type { Db } from "../../db/index.ts";
 import type { Logger } from "../../log.ts";
-import { getAccount, listAccounts, setAccountSyncBuf, touchAccountInbound, updateAccountStatus, type AccountRow } from "../../repo/accounts.ts";
+import { deleteAccount, getAccount, listAccounts, setAccountSyncBuf, touchAccountInbound, updateAccountStatus, type AccountRow } from "../../repo/accounts.ts";
 import { addInboundLog } from "../../repo/logs.ts";
-import { getPeerToken, upsertPeer } from "../../repo/peers.ts";
+import { deleteAccountKeywords } from "../../repo/keywords.ts";
+import { deleteAccountPeers, getPeerToken, upsertPeer } from "../../repo/peers.ts";
+import { revokeSendkeys } from "../../repo/sendkeys.ts";
 import { confirmLogin, getLoginView, startLogin as startLoginFlow, stopAllLoginDrivers, submitVerifyCode, type LoginDeps } from "./login.ts";
 import { extractText, startMonitor, type MonitorHandle } from "./monitor.ts";
 import { sendText } from "./sender.ts";
@@ -86,7 +88,18 @@ export function createWechatChannel(deps: WechatChannelDeps): WechatChannel {
     },
 
     async confirmLogin(sessionId) {
-      return confirmLogin(loginDeps, sessionId);
+      const r = await confirmLogin(loginDeps, sessionId);
+      // 同一用户重新绑定：清理同 userId 的旧账号（官方 clearStaleAccountsForUserId 语义），
+      // 避免重复占用席位与产生歧义路由目标。
+      if (r.ownerUserId) {
+        for (const a of listAccounts(deps.db)) {
+          if (a.id !== r.accountId && a.ownerUserId === r.ownerUserId) {
+            log.info("removing stale account for re-bound user", { stale: a.id, user: r.ownerUserId });
+            await channel.removeAccount(a.id);
+          }
+        }
+      }
+      return r;
     },
 
     async startAccount(accountId) {
@@ -119,6 +132,15 @@ export function createWechatChannel(deps: WechatChannelDeps): WechatChannel {
         monitors.delete(accountId);
         await handle.stop();
       }
+    },
+
+    async removeAccount(accountId) {
+      await this.stopAccount(accountId, "removed");
+      revokeSendkeys(deps.db, accountId, Date.now());
+      deleteAccountKeywords(deps.db, accountId);
+      deleteAccountPeers(deps.db, accountId);
+      deleteAccount(deps.db, accountId);
+      log.info("account removed", { accountId });
     },
 
     async send(accountId, peerUserId, text): Promise<SendResult> {

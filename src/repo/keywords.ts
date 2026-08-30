@@ -49,6 +49,11 @@ export function deleteKeyword(db: Db, accountId: string, id: number): void {
   db.delete(keywords).where(and(eq(keywords.accountId, accountId), eq(keywords.id, id))).run();
 }
 
+/** 账号解绑/清理时删除其全部关键词。 */
+export function deleteAccountKeywords(db: Db, accountId: string): void {
+  db.delete(keywords).where(eq(keywords.accountId, accountId)).run();
+}
+
 export function setKeywordEnabled(db: Db, accountId: string, id: number, enabled: boolean): void {
   db.update(keywords).set({ enabled }).where(and(eq(keywords.accountId, accountId), eq(keywords.id, id))).run();
 }

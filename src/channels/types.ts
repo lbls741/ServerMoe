@@ -37,6 +37,8 @@ export interface Channel {
   confirmLogin(sessionId: string): Promise<ConfirmOutcome>;
   startAccount(accountId: string): Promise<void>;
   stopAccount(accountId: string, reason?: string): Promise<void>;
+  /** 彻底移除账号：停 monitor、吊销 sendkey、清理关键词/预热记录/凭据（解绑与重绑清理共用）。 */
+  removeAccount(accountId: string): Promise<void>;
   send(accountId: string, peerUserId: string, text: string): Promise<SendResult>;
   listStatuses(): ChannelAccountView[];
   shutdown(): Promise<void>;
