@@ -10,3 +10,6 @@ research/
 *.log
 .DS_Store
 .zcode/
+AGENT.md
+docs/recon.md
+docs/dev-plan.md
