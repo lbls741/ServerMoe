@@ -8,8 +8,9 @@ import { addInboundLog } from "../../repo/logs.ts";
 import { deleteAccountKeywords } from "../../repo/keywords.ts";
 import { deleteAccountPeers, getPeerToken, upsertPeer } from "../../repo/peers.ts";
 import { revokeSendkeys } from "../../repo/sendkeys.ts";
-import { confirmLogin, getLoginView, startLogin as startLoginFlow, stopAllLoginDrivers, submitVerifyCode, type LoginDeps } from "./login.ts";
-import { extractText, startMonitor, type MonitorHandle } from "./monitor.ts";
+import { confirmLogin, getLoginView, pollLoginOnce, startLogin as startLoginFlow, stopAllLoginDrivers, submitVerifyCode, type LoginDeps } from "./login.ts";
+import { extractText, harvestOnce, type HarvestCallbacks, type HarvestResult } from "./harvest.ts";
+import { startMonitor, type MonitorHandle } from "./monitor.ts";
 import { sendText } from "./sender.ts";
 import type { ApiCtx } from "./ilink/client.ts";
 import type { WeixinMessage } from "./ilink/types.ts";
@@ -21,18 +22,26 @@ export interface WechatChannelDeps {
   masterKey: Buffer;
   /** sendkey 哈希盐，与 core.salt 一致 */
   salt: string;
+  /**
+   * 入站策略：resident（默认）= 进程内常驻 monitor 长轮询；
+   * cron / do = 收割由外部驱动（Workers scheduled / Durable Object alarm），startAccount 不启动常驻循环。
+   */
+  monitorMode?: "resident" | "cron" | "do";
+  /** 绑定状态机推进方式：driver（默认，常驻后台）| request（每次 pollLogin 推进一步，Workers）。 */
+  pollMode?: "driver" | "request";
   /** 仅测试注入：覆盖登录默认入口 */
   ilinkBaseUrl?: string;
 }
 
 export interface WechatChannel extends Channel {
-  /** 预热回调：某 peer 的新 context_token 捕获后触发（index.ts 里接到 push.flushOutbox）。 */
+  /** 预热回调：某 peer 捕获（含刷新）context_token 后触发（index.ts 里接到 push.flushOutbox）。 */
   onWarmup?: (accountId: string, peerUserId: string) => void | Promise<void>;
-  /** 入站文本路由回调：token 已捕获，交由关键词路由器处理（index.ts 接线）。 */
+  /** 入站文本路由回调：仅对已建联（此前已捕获 context_token）peer 的消息触发（index.ts 接线）。 */
   onInbound?: (accountId: string, fromUserId: string, text: string, msgId?: string) => void | Promise<void>;
 }
 
 export function createWechatChannel(deps: WechatChannelDeps): WechatChannel {
+  const monitorMode = deps.monitorMode ?? "resident";
   const monitors = new Map<string, MonitorHandle>();
   const log = deps.log.child({ ch: "wechat" });
   const loginDeps: LoginDeps = {
@@ -42,6 +51,7 @@ export function createWechatChannel(deps: WechatChannelDeps): WechatChannel {
     botAgent: deps.cfg.botAgent,
     salt: deps.salt,
     baseUrl: deps.ilinkBaseUrl,
+    pollMode: deps.pollMode,
   };
 
   function apiCtx(account: AccountRow): ApiCtx {
@@ -57,17 +67,38 @@ export function createWechatChannel(deps: WechatChannelDeps): WechatChannel {
     if (!from) return;
     const text = extractText(msg);
     const now = Date.now();
-    touchAccountInbound(deps.db, account.id, now);
+    // 建联判定：本条消息之前该 peer 是否已有 context_token。没有则通道对该 peer 尚未连接，
+    // 本条消息只用于建联（捕获 token、补发排队推送），不进关键词路由——
+    // 避免新用户绑定后按指引发送的首条消息被当成指令、收到「未识别的指令」回执。
+    const connected = Boolean(await getPeerToken(deps.db, account.id, from));
+    await touchAccountInbound(deps.db, account.id, now);
     if (msg.context_token) {
-      upsertPeer(deps.db, account.id, from, msg.context_token, now);
-      addInboundLog(deps.db, { ts: now, accountId: account.id, fromUserId: from, text, action: "warmup" });
+      await upsertPeer(deps.db, account.id, from, msg.context_token, now);
+      await addInboundLog(deps.db, { ts: now, accountId: account.id, fromUserId: from, text, action: connected ? "captured" : "warmup" });
       await channel.onWarmup?.(account.id, from);
     } else {
-      addInboundLog(deps.db, { ts: now, accountId: account.id, fromUserId: from, text, action: "captured" });
+      await addInboundLog(deps.db, { ts: now, accountId: account.id, fromUserId: from, text, action: "captured" });
     }
-    if (text) {
+    if (text && connected) {
       await channel.onInbound?.(account.id, from, text, msg.message_id != null ? String(msg.message_id) : undefined);
     }
+  }
+
+  /** monitor 与外部驱动器（cron/DO/按需收割）共用的收割回调集。 */
+  function harvestCallbacks(): HarvestCallbacks {
+    return {
+      onMessage: (acc, msg) => handleInbound(acc, msg),
+      onCursor: (id, cursor) => setAccountSyncBuf(deps.db, id, cursor, Date.now()),
+      onStale: (id) =>
+        updateAccountStatus(deps.db, id, "paused", Date.now(), {
+          pausedUntil: Date.now() + 60 * 60_000,
+          lastError: "errcode -14: bot_token 失效",
+        }),
+      onAlive: async (id) => {
+        const a = await getAccount(deps.db, id);
+        if (a && a.status !== "active") await updateAccountStatus(deps.db, id, "active", Date.now());
+      },
+    };
   }
 
   const channel: WechatChannel = {
@@ -78,12 +109,15 @@ export function createWechatChannel(deps: WechatChannelDeps): WechatChannel {
     },
 
     async pollLogin(sessionId) {
-      const row = getLoginView(loginDeps, sessionId);
+      const row =
+        (loginDeps.pollMode ?? "driver") === "request"
+          ? await pollLoginOnce(loginDeps, sessionId)
+          : await getLoginView(loginDeps, sessionId);
       return { sessionId: row.id, status: row.status, qrcodeUrl: row.qrcodeUrl, message: row.message };
     },
 
     async submitVerifyCode(sessionId, code) {
-      const row = submitVerifyCode(loginDeps, sessionId, code);
+      const row = await submitVerifyCode(loginDeps, sessionId, code);
       return { sessionId: row.id, status: row.status, qrcodeUrl: row.qrcodeUrl, message: row.message };
     },
 
@@ -92,7 +126,7 @@ export function createWechatChannel(deps: WechatChannelDeps): WechatChannel {
       // 同一用户重新绑定：清理同 userId 的旧账号（官方 clearStaleAccountsForUserId 语义），
       // 避免重复占用席位与产生歧义路由目标。
       if (r.ownerUserId) {
-        for (const a of listAccounts(deps.db)) {
+        for (const a of await listAccounts(deps.db)) {
           if (a.id !== r.accountId && a.ownerUserId === r.ownerUserId) {
             log.info("removing stale account for re-bound user", { stale: a.id, user: r.ownerUserId });
             await channel.removeAccount(a.id);
@@ -103,25 +137,14 @@ export function createWechatChannel(deps: WechatChannelDeps): WechatChannel {
     },
 
     async startAccount(accountId) {
+      if (monitorMode !== "resident") return; // cron/do 模式：收割由外部驱动
       if (monitors.has(accountId)) return;
-      const account = getAccount(deps.db, accountId);
+      const account = await getAccount(deps.db, accountId);
       if (!account) throw new Error(`account ${accountId} not found`);
       const handle = startMonitor(
-        { log: deps.log, masterKey: deps.masterKey, botAgent: deps.cfg.botAgent },
+        { log: deps.log, masterKey: deps.masterKey, botAgent: deps.cfg.botAgent, db: deps.db },
         account,
-        {
-          onMessage: (acc, msg) => handleInbound(acc, msg),
-          onCursor: (id, cursor) => setAccountSyncBuf(deps.db, id, cursor, Date.now()),
-          onStale: (id) =>
-            updateAccountStatus(deps.db, id, "paused", Date.now(), {
-              pausedUntil: Date.now() + 60 * 60_000,
-              lastError: "errcode -14: bot_token 失效",
-            }),
-          onAlive: (id) => {
-            const a = getAccount(deps.db, id);
-            if (a && a.status !== "active") updateAccountStatus(deps.db, id, "active", Date.now());
-          },
-        },
+        harvestCallbacks(),
       );
       monitors.set(accountId, handle);
     },
@@ -136,23 +159,33 @@ export function createWechatChannel(deps: WechatChannelDeps): WechatChannel {
 
     async removeAccount(accountId) {
       await this.stopAccount(accountId, "removed");
-      revokeSendkeys(deps.db, accountId, Date.now());
-      deleteAccountKeywords(deps.db, accountId);
-      deleteAccountPeers(deps.db, accountId);
-      deleteAccount(deps.db, accountId);
+      await revokeSendkeys(deps.db, accountId, Date.now());
+      await deleteAccountKeywords(deps.db, accountId);
+      await deleteAccountPeers(deps.db, accountId);
+      await deleteAccount(deps.db, accountId);
       log.info("account removed", { accountId });
     },
 
     async send(accountId, peerUserId, text): Promise<SendResult> {
-      const account = getAccount(deps.db, accountId);
+      const account = await getAccount(deps.db, accountId);
       if (!account) return { ok: false, reason: "ERROR", error: `account ${accountId} not found` };
-      const token = getPeerToken(deps.db, accountId, peerUserId);
+      const token = await getPeerToken(deps.db, accountId, peerUserId);
       if (!token) return { ok: false, reason: "WARMUP_REQUIRED" };
       return sendText(apiCtx(account), peerUserId, text, token);
     },
 
-    listStatuses(): ChannelAccountView[] {
-      return listAccounts(deps.db).map((a) => ({
+    async harvest(accountId, opts): Promise<HarvestResult> {
+      const account = await getAccount(deps.db, accountId);
+      if (!account) throw new Error(`account ${accountId} not found`);
+      return harvestOnce(
+        { log: deps.log, masterKey: deps.masterKey, botAgent: deps.cfg.botAgent, db: deps.db, cb: harvestCallbacks() },
+        account,
+        opts,
+      );
+    },
+
+    async listStatuses(): Promise<ChannelAccountView[]> {
+      return (await listAccounts(deps.db)).map((a) => ({
         accountId: a.id,
         label: a.label,
         status: a.status,

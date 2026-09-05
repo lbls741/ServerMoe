@@ -6,6 +6,7 @@ import {
   CONFIG_TIMEOUT_MS,
   ILINK_APP_ID,
   LONG_POLL_TIMEOUT_MS,
+  QR_POLL_TIMEOUT_MS,
 } from "./constants.ts";
 import type {
   BaseInfo,
@@ -119,11 +120,17 @@ export async function fetchQrCode(ctx: ApiCtx, botType: string, localTokenList: 
 }
 
 /** 长轮询绑定状态（服务端最多挂起 ~35s）。客户端超时/外部中止返回 wait。 */
-export async function pollQrStatus(ctx: ApiCtx, qrcode: string, verifyCode?: string, external?: AbortSignal): Promise<QrStatusResp> {
+export async function pollQrStatus(
+  ctx: ApiCtx,
+  qrcode: string,
+  verifyCode?: string,
+  external?: AbortSignal,
+  holdMs: number = QR_POLL_TIMEOUT_MS + 5_000,
+): Promise<QrStatusResp> {
   let endpoint = `ilink/bot/get_qrcode_status?qrcode=${encodeURIComponent(qrcode)}`;
   if (verifyCode) endpoint += `&verify_code=${encodeURIComponent(verifyCode)}`;
   try {
-    return await getJson<QrStatusResp>(ctx, endpoint, 35_000 + 5_000, external);
+    return await getJson<QrStatusResp>(ctx, endpoint, holdMs, external);
   } catch (err) {
     if (isAbort(err)) return { status: "wait" };
     // 网关超时（如 Cloudflare 524）或瞬时网络错误：视为等待，由上层 deadline 兜底

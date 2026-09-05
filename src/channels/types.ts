@@ -40,6 +40,11 @@ export interface Channel {
   /** 彻底移除账号：停 monitor、吊销 sendkey、清理关键词/预热记录/凭据（解绑与重绑清理共用）。 */
   removeAccount(accountId: string): Promise<void>;
   send(accountId: string, peerUserId: string, text: string): Promise<SendResult>;
-  listStatuses(): ChannelAccountView[];
+  /**
+   * 对账号执行一次「收割」（一次 getupdates 长轮询 + 消息处理 + 游标落库）。
+   * resident 模式由常驻 monitor 内部循环调用；cron/DO/按需收割策略经此方法驱动同一代码路径。
+   */
+  harvest(accountId: string, opts?: { holdMs?: number }): Promise<import("./wechat/harvest.ts").HarvestResult>;
+  listStatuses(): Promise<ChannelAccountView[]>;
   shutdown(): Promise<void>;
 }

@@ -1,7 +1,12 @@
 // 管理页（零构建 SSR + 原生 JS）。M4 范围：账号状态、绑定向导、关键词管理、
 // 未命中提醒设置、收发日志、sendkey 轮换。绑定推进由服务端驱动，前端仅读视图。
+// 更新提示条：首屏状态由服务端内嵌 __MOE_UPDATE__，后续随 /api/v1 响应头 X-Moe-Update 刷新。
 
-export function renderIndex(): string {
+import type { UpdatePayload } from "../update/checker.ts";
+
+export function renderIndex(update?: UpdatePayload): string {
+  const initScript =
+    "window.__MOE_UPDATE__=" + (update ? JSON.stringify(update).replace(/</g, "\\u003c") : "null") + ";";
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -29,9 +34,17 @@ export function renderIndex(): string {
   .key { font-size: 15px; letter-spacing: 1px; background: #f0fdf4; padding: 4px 8px; border-radius: 4px; }
   .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 6px 0; }
   .url { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .update-bar { max-height: 0; overflow: hidden; transition: max-height .35s ease; }
+  .update-inner { display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
+    border: 1px solid #cbd5e1; background: #f8fafc; border-radius: 8px; padding: 10px 12px;
+    font-size: 13px; margin: 12px 0; box-sizing: border-box; }
+  .update-inner.available { border-color: #16a34a; background: #f0fdf4; }
+  .update-inner.error { border-color: #dc2626; background: #fef2f2; }
+  .update-inner.selfbuild { border-color: #cbd5e1; background: #f8fafc; }
 </style>
 </head>
 <body>
+<div id="updateBar" class="update-bar" aria-live="polite"><div id="updateInner" class="update-inner"></div></div>
 <h1>ServerMoe 网关</h1>
 
 <section id="auth">
@@ -47,6 +60,8 @@ export function renderIndex(): string {
   <h2>账号状态 <span class="muted" id="seatInfo"></span></h2>
   <table><tbody id="accounts"><tr><td class="muted">加载中…</td></tr></tbody></table>
   <div id="keyOut"></div>
+  <p class="muted">微信侧限制：用户最近一次发消息后 24 小时内 bot 才能主动推送，回复任意内容即可重置窗口。
+  开启「临期提醒」后，网关会在窗口到期前按提前量向该账号发一条提醒（每个静默窗口至多一条）。</p>
 </section>
 
 <section>
@@ -101,6 +116,36 @@ export function renderIndex(): string {
 </section>
 
 <section>
+  <h2>版本与更新</h2>
+  <div class="row">
+    <label><input type="checkbox" id="updEnabled"> 自动检测新版本（后端访问 GitHub Release）</label>
+    <span class="muted">检测频率</span>
+    <select id="updInterval">
+      <option value="3600">每小时</option>
+      <option value="21600">每 6 小时</option>
+      <option value="43200">每 12 小时</option>
+      <option value="86400" selected>每天</option>
+      <option value="604800">每周</option>
+    </select>
+  </div>
+  <div class="row"><button id="updSave">保存</button><span id="updStatus" class="muted"></span></div>
+  <p class="muted" id="updInfo"></p>
+</section>
+
+<section>
+  <h2>入站轮询（Workers）</h2>
+  <div class="row">
+    <span class="muted">策略</span><span id="pollMode">-</span>
+    <span class="muted">间隔(秒)</span>
+    <input type="number" id="pollInterval" min="60" max="86400" step="1" style="width:90px">
+    <button id="pollSave">保存间隔</button>
+    <button id="pollNow">立即收割</button>
+    <span id="pollStatus" class="muted"></span>
+  </div>
+  <p class="muted" id="pollInfo">自部署（resident）由常驻 monitor 实时收割；Workers（cron/do）按此间隔定时收割，改间隔无需重新部署。D1 免费额度（10 万写/天）足以支撑 1 分钟级轮询。</p>
+</section>
+
+<section>
   <h2>邮件桥（可选）</h2>
   <div class="row">
     <span class="muted">账号</span><select id="mailAccount"></select>
@@ -135,14 +180,86 @@ export function renderIndex(): string {
   <table style="margin-top:10px"><tbody id="logPush"><tr><td class="muted">—</td></tr></tbody></table>
 </section>
 
+<script>${initScript}</script>
 <script>
 const $ = (id) => document.getElementById(id);
 const tok = () => localStorage.getItem("moe_admin") || "";
-const api = (path, opts = {}) => fetch(path, { ...opts,
-  headers: { "content-type": "application/json", authorization: "Bearer " + tok(), ...(opts.headers || {}) } });
+const esc = (s) => String(s).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
 const fmt = (ts) => ts ? new Date(ts).toLocaleString("zh-CN") : "—";
+const api = async (path, opts = {}) => {
+  const r = await fetch(path, { ...opts,
+    headers: { "content-type": "application/json", authorization: "Bearer " + tok(), ...(opts.headers || {}) } });
+  const v = r.headers.get("X-Moe-Update");
+  if (v) { try { applyUpdateState(JSON.parse(v)); } catch (e) { /* 状态头异常不阻塞主流程 */ } }
+  return r;
+};
 let accounts = [];
 let curAccount = "";
+
+// ---- 更新提示条 ----
+let updateState = null;
+function hideUpdateBar() { $("updateBar").style.maxHeight = "0px"; }
+function showUpdateBar(html, cls) {
+  const inner = $("updateInner");
+  inner.className = "update-inner " + cls;
+  inner.innerHTML = html;
+  $("updateBar").style.maxHeight = inner.scrollHeight + "px";
+}
+function applyUpdateState(u) {
+  updateState = u || null;
+  renderUpdSettings();
+  if (!u) { hideUpdateBar(); return; }
+  if (u.kind === "selfbuilt") {
+    showUpdateBar('<span>当前为<b>自构建版本</b>，更新检测不可用。如需接收新版本提醒，请改用官方 Docker 镜像或 Release 部署。</span>', "selfbuild");
+    return;
+  }
+  if (u.kind === "available") {
+    if (sessionStorage.getItem("moe_upd_dismissed") === "available:" + u.latest) { hideUpdateBar(); return; }
+    showUpdateBar(
+      '<span>🚀 <b>更新可用</b>：最新版本 <b>v' + esc(u.latest) + '</b>（当前 v' + esc(u.current) + '），' +
+      '上次检测 ' + fmt(u.checkedAt) + '</span>' +
+      '<button onclick="openRelease()">前往 Release 页</button>' +
+      '<button class="ghost" onclick="dismissUpdate()">收起</button>', "available");
+    return;
+  }
+  if (u.kind === "error") {
+    if (sessionStorage.getItem("moe_upd_dismissed") === "error:") { hideUpdateBar(); return; }
+    showUpdateBar(
+      '<span>⚠️ <b>更新检测失败</b>：暂时无法访问 GitHub Release，将按检测频率自动重试。</span>' +
+      '<button class="ghost" onclick="dismissUpdate()">收起</button>', "error");
+    return;
+  }
+  hideUpdateBar();
+}
+window.openRelease = () => {
+  if (updateState && updateState.url) window.open(updateState.url, "_blank", "noopener");
+};
+window.dismissUpdate = () => {
+  if (updateState && (updateState.kind === "available" || updateState.kind === "error")) {
+    sessionStorage.setItem("moe_upd_dismissed", updateState.kind + ":" + (updateState.latest || ""));
+  }
+  hideUpdateBar();
+};
+applyUpdateState(window.__MOE_UPDATE__ || null);
+
+// ---- 版本与更新设置 ----
+function renderUpdSettings() {
+  const selfbuilt = Boolean(updateState && updateState.kind === "selfbuilt");
+  $("updEnabled").disabled = selfbuilt;
+  $("updInterval").disabled = selfbuilt;
+  $("updSave").disabled = selfbuilt;
+  if (selfbuilt) { $("updInfo").textContent = "自构建版本不参与更新检测。"; return; }
+  const cur = updateState && updateState.current ? "v" + updateState.current : "—";
+  const last = updateState && updateState.checkedAt ? "上次检测 " + fmt(updateState.checkedAt) : "尚未检测";
+  $("updInfo").textContent = "当前版本 " + cur + " · " + last + " · 有新版本时页面顶部会展开提示";
+}
+$("updSave").onclick = async () => {
+  const j = await (await api("/api/v1/admin/settings", { method: "PUT", body: JSON.stringify({
+    update_check_enabled: $("updEnabled").checked ? "1" : "0",
+    update_check_interval_sec: Number($("updInterval").value),
+  }) })).json();
+  $("updStatus").textContent = j.code === 0 ? "已保存 " + new Date().toLocaleTimeString("zh-CN") : "保存失败: " + j.message;
+};
 
 $("tok").value = tok();
 $("tokBtn").onclick = () => { localStorage.setItem("moe_admin", $("tok").value.trim()); boot(); };
@@ -151,6 +268,7 @@ async function boot() {
   if (!tok()) { $("accounts").innerHTML = '<tr><td class="muted">请先在上方填入管理令牌并点「保存」</td></tr>'; return; }
   await loadAccounts();
   loadSettings();
+  loadPoll();
   loadLogs();
   loadMail();
 }
@@ -217,13 +335,23 @@ async function loadAccounts() {
     const j = await r.json();
     accounts = j.sessions || [];
     $("seatInfo").textContent = j.seats ? "已用 " + j.seats.used + "/" + j.seats.limit + " 席位" : "";
-    $("accounts").innerHTML = accounts.map((s) =>
-      '<tr><td><b>' + s.accountId + '</b><br><span class="muted">' + s.baseUrl + '</span></td>' +
-      '<td><span class="badge ' + s.status + '">' + s.status + '</span><br><span class="muted">入站 ' + fmt(s.lastInboundAt) + '</span></td>' +
+    $("accounts").innerHTML = accounts.map((s, i) => {
+      const w = s.warn || {};
+      let win = "未预热";
+      if (s.lastInboundAt) {
+        const left = s.lastInboundAt + 86400000 - Date.now();
+        win = left <= 0 ? "窗口已过期·回复即恢复" : "窗口剩 " + Math.floor(left / 3600000) + "h" + Math.floor((left % 3600000) / 60000) + "m";
+      }
+      return '<tr><td><b>' + s.accountId + '</b><br><span class="muted">' + s.baseUrl + '</span></td>' +
+      '<td><span class="badge ' + s.status + '">' + s.status + '</span><br><span class="muted">入站 ' + fmt(s.lastInboundAt) + '<br>' + win + '</span></td>' +
       '<td>预热用户 ' + s.peers + '<br><span class="muted">关键词 ' + s.activeSendkeys + ' key</span></td>' +
+      '<td><label><input type="checkbox" id="warnOn' + i + '"' + (w.enabled ? " checked" : "") + '> 临期提醒</label><br>' +
+      '<input id="warnLead' + i + '" type="number" value="' + (w.leadSec ? w.leadSec / 60 : 30) + '" min="5" max="720" style="width:58px" title="窗口到期前多少分钟提醒"> <span class="muted">分钟前</span><br>' +
+      '<input id="warnText' + i + '" placeholder="提醒文案（留空用默认）" size="22" value="' + esc(w.text || "") + '"><br>' +
+      '<button class="ghost" onclick="saveWarn(' + i + ', this)">保存提醒设置</button></td>' +
       '<td><button class="ghost" onclick="resetKey(\\'' + s.accountId + '\\')">重置 sendkey</button> ' +
-      '<button class="danger" onclick="unbind(\\'' + s.accountId + '\\')">解绑</button></td></tr>')
-      .join("") || '<tr><td class="muted">暂无绑定，请在下方完成绑定向导</td></tr>';
+      '<button class="danger" onclick="unbind(\\'' + s.accountId + '\\')">解绑</button></td></tr>';
+    }).join("") || '<tr><td class="muted">暂无绑定，请在下方完成绑定向导</td></tr>';
     const sel = $("kwAccount");
     sel.innerHTML = accounts.map((s) => '<option value="' + s.accountId + '">' + s.accountId + '</option>').join("");
     if (!accounts.find((s) => s.accountId === curAccount)) curAccount = accounts[0] ? accounts[0].accountId : "";
@@ -237,6 +365,18 @@ window.resetKey = async (id) => {
   const j = await (await api("/api/v1/sessions/" + id + "/reset-key", { method: "POST" })).json();
   if (j.code === 0) $("keyOut").innerHTML = '<p>新 sendkey（<b>仅显示一次</b>）：<code class="key">' + j.sendkey + '</code></p>';
   else $("keyOut").innerHTML = '<p class="err">重置失败: ' + j.message + '</p>';
+};
+window.saveWarn = async (i, btn) => {
+  const s = accounts[i];
+  if (!s) return;
+  const body = {
+    enabled: $("warnOn" + i).checked,
+    text: $("warnText" + i).value,
+    leadSec: (Number($("warnLead" + i).value) || 30) * 60,
+  };
+  const j = await (await api("/api/v1/sessions/" + encodeURIComponent(s.accountId) + "/warn", { method: "PUT", body: JSON.stringify(body) })).json();
+  btn.textContent = j.code === 0 ? "已保存" : "失败";
+  setTimeout(() => { btn.textContent = "保存提醒设置"; }, 1500);
 };
 $("kwAccount").onchange = () => { curAccount = $("kwAccount").value; loadKeywords(); };
 $("kwRefresh").onclick = loadKeywords;
@@ -269,6 +409,9 @@ async function loadSettings() {
     if (j.code !== 0) return;
     $("setRemind").checked = j.no_match_remind === "1";
     $("setText").value = j.no_match_text || "";
+    $("updEnabled").checked = j.update_check_enabled !== "0";
+    const iv = String(j.update_check_interval_sec || 86400);
+    if ($("updInterval").querySelector('option[value="' + iv + '"]')) $("updInterval").value = iv;
   } catch {}
 }
 $("setSave").onclick = async () => {
@@ -277,6 +420,35 @@ $("setSave").onclick = async () => {
     no_match_text: $("setText").value,
   }) })).json();
   $("setStatus").textContent = j.code === 0 ? "已保存 " + new Date().toLocaleTimeString("zh-CN") : "保存失败: " + j.message;
+};
+
+async function loadPoll() {
+  try {
+    const j = await (await api("/api/v1/admin/settings")).json();
+    if (j.code !== 0) return;
+    $("pollMode").textContent = j.ingest_mode + (j.ondemand_harvest === "on" ? " + 按需收割" : "");
+    $("pollInterval").value = j.poll_interval_sec;
+    $("pollInfo").textContent = j.ingest_mode === "resident"
+      ? "常驻 monitor 实时收割（自部署形态）"
+      : j.poll_last_wake_at
+        ? "上次收割: " + new Date(j.poll_last_wake_at).toLocaleString("zh-CN")
+        : "尚未收割（等待下一次 scheduled 唤醒或点「立即收割」）";
+  } catch {}
+}
+$("pollSave").onclick = async () => {
+  const j = await (await api("/api/v1/admin/settings", { method: "PUT", body: JSON.stringify({
+    poll_interval_sec: Number($("pollInterval").value),
+  }) })).json();
+  $("pollStatus").textContent = j.code === 0 ? "已保存" : "保存失败: " + j.message;
+  loadPoll();
+};
+$("pollNow").onclick = async () => {
+  $("pollStatus").textContent = "收割中…";
+  try {
+    const j = await (await api("/api/v1/admin/ingest/poll-now", { method: "POST" })).json();
+    $("pollStatus").textContent = j.code === 0 ? "已收割 " + ((j.harvests || []).length) + " 个账号" : j.message;
+  } catch (e) { $("pollStatus").textContent = "触发失败: " + e; }
+  loadPoll();
 };
 
 async function loadLogs() {

@@ -8,7 +8,7 @@ import type { WechatChannel } from "../channels/wechat/channel.ts";
 import { keywords as keywordsTable, outbox as outboxTable, pushLog } from "../db/schema.ts";
 import { encryptString, generateSendkey, safeEqual, sha256Hex } from "../crypto.ts";
 import type { Core } from "../core.ts";import type { PushService } from "../core/push.ts";
-import { getAccount, listAccounts } from "../repo/accounts.ts";
+import { getAccount, listAccounts, setWarnSettings } from "../repo/accounts.ts";
 import { getLoginSession } from "../repo/loginSessions.ts";
 import { listRecentInbound, listRecentPush } from "../repo/logs.ts";
 import {
@@ -27,6 +27,9 @@ import { isValidRegex } from "../router/matcher.ts";
 import { isReserved } from "../router/builtins.ts";
 import { bearerToken, requireAdmin } from "./auth.ts";
 import type { RateLimiter } from "./ratelimit.ts";
+import { normalizeIntervalSec } from "../update/checker.ts";
+import { normalizeWarnLeadSec } from "../core/warn.ts";
+import { effectivePollIntervalSec, pollNow } from "../core/ingest.ts";
 
 function errStatus(err: unknown): { code: number; message: string } {
   const status = (err as { status?: number }).status ?? 500;
@@ -34,18 +37,18 @@ function errStatus(err: unknown): { code: number; message: string } {
 }
 
 /** 关键词接口的账号作用域鉴权：sendkey Bearer 决定账号；admin 需显式提供 accountId。 */
-function accountScope(
+async function accountScope(
   c: Context,
   core: Core,
   explicitAccountId?: string,
-): { ok: true; accountId: string } | { ok: false; status: 400 | 401; message: string } {
+): Promise<{ ok: true; accountId: string } | { ok: false; status: 400 | 401; message: string }> {
   const bearer = bearerToken(c);
   if (bearer && safeEqual(bearer, core.adminToken)) {
     if (explicitAccountId) return { ok: true, accountId: explicitAccountId };
     return { ok: false, status: 400, message: "admin 需要提供 accountId" };
   }
   if (bearer) {
-    const sk = findActiveSendkey(core.db, sha256Hex(core.salt + ":" + bearer));
+    const sk = await findActiveSendkey(core.db, sha256Hex(core.salt + ":" + bearer));
     if (sk) return { ok: true, accountId: sk.accountId };
   }
   return { ok: false, status: 401, message: "sendkey or admin token required" };
@@ -66,7 +69,7 @@ function mountKeywords(app: HonoApp, core: Core): void {
       secret?: string;
       accountId?: string;
     };
-    const scope = accountScope(c, core, body.accountId);
+    const scope = await accountScope(c, core, body.accountId);
     if (!scope.ok) return c.json({ code: scope.status, message: scope.message }, scope.status);
 
     const keyword = (body.keyword ?? "").trim();
@@ -82,11 +85,11 @@ function mountKeywords(app: HonoApp, core: Core): void {
     } catch {
       return c.json({ code: 400, message: "url 必须是合法的 http(s) 地址" }, 400);
     }
-    if (findKeywordByKeyword(core.db, scope.accountId, keyword)) {
+    if (await findKeywordByKeyword(core.db, scope.accountId, keyword)) {
       return c.json({ code: 409, message: `关键词「${keyword}」已存在` }, 409);
     }
 
-    const row = createKeyword(core.db, {
+    const row = await createKeyword(core.db, {
       accountId: scope.accountId,
       keyword,
       matchMode: match,
@@ -98,29 +101,29 @@ function mountKeywords(app: HonoApp, core: Core): void {
     return c.json({ code: 0, keyword: keywordView(row) });
   });
 
-  app.get("/api/v1/keywords", (c) => {
-    const scope = accountScope(c, core, c.req.query("accountId") ?? undefined);
+  app.get("/api/v1/keywords", async (c) => {
+    const scope = await accountScope(c, core, c.req.query("accountId") ?? undefined);
     if (!scope.ok) return c.json({ code: scope.status, message: scope.message }, scope.status);
-    return c.json({ code: 0, keywords: listKeywords(core.db, scope.accountId).map(keywordView) });
+    return c.json({ code: 0, keywords: (await listKeywords(core.db, scope.accountId)).map(keywordView) });
   });
 
   app.patch("/api/v1/keywords/:id", async (c) => {
     const body = (await c.req.json().catch(() => ({}))) as { enabled?: boolean; accountId?: string };
-    const scope = accountScope(c, core, body.accountId ?? c.req.query("accountId") ?? undefined);
+    const scope = await accountScope(c, core, body.accountId ?? c.req.query("accountId") ?? undefined);
     if (!scope.ok) return c.json({ code: scope.status, message: scope.message }, scope.status);
-    const row = getKeyword(core.db, Number(c.req.param("id")));
+    const row = await getKeyword(core.db, Number(c.req.param("id")));
     if (!row || row.accountId !== scope.accountId) return c.json({ code: 404, message: "keyword not found" }, 404);
     if (typeof body.enabled !== "boolean") return c.json({ code: 400, message: "enabled(boolean) required" }, 400);
-    setKeywordEnabled(core.db, scope.accountId, row.id, body.enabled);
-    return c.json({ code: 0, keyword: keywordView(getKeyword(core.db, row.id)!) });
+    await setKeywordEnabled(core.db, scope.accountId, row.id, body.enabled);
+    return c.json({ code: 0, keyword: keywordView((await getKeyword(core.db, row.id))!) });
   });
 
-  app.delete("/api/v1/keywords/:id", (c) => {
-    const scope = accountScope(c, core, c.req.query("accountId") ?? undefined);
+  app.delete("/api/v1/keywords/:id", async (c) => {
+    const scope = await accountScope(c, core, c.req.query("accountId") ?? undefined);
     if (!scope.ok) return c.json({ code: scope.status, message: scope.message }, scope.status);
-    const row = getKeyword(core.db, Number(c.req.param("id")));
+    const row = await getKeyword(core.db, Number(c.req.param("id")));
     if (!row || row.accountId !== scope.accountId) return c.json({ code: 404, message: "keyword not found" }, 404);
-    deleteKeyword(core.db, scope.accountId, row.id);
+    await deleteKeyword(core.db, scope.accountId, row.id);
     return c.json({ code: 0, message: "deleted" });
   });
 }
@@ -132,7 +135,7 @@ function mountAdmin(app: HonoApp, core: Core, wechat: WechatChannel): void {
 
   app.post("/api/v1/login/start", async (c) => {
     // 席位控制（R4）：绑定数量达到上限时拒绝新登录
-    const used = listAccounts(core.db).length;
+    const used = (await listAccounts(core.db)).length;
     if (used >= core.cfg.seatLimit) {
       return c.json(
         { code: 409, message: `绑定席位已满（${used}/${core.cfg.seatLimit}）。请先解绑账号，或调大 SSC_SEAT_LIMIT。` },
@@ -178,26 +181,34 @@ function mountAdmin(app: HonoApp, core: Core, wechat: WechatChannel): void {
   app.get("/api/v1/login/qr.svg", async (c) => {
     const sessionId = c.req.query("sessionId");
     if (!sessionId) return c.json({ code: 400, message: "sessionId required" }, 400);
-    const row = getLoginSession(core.db, sessionId);
+    const row = await getLoginSession(core.db, sessionId);
     if (!row) return c.json({ code: 404, message: "session not found" }, 404);
     const svg = await QRCode.toString(row.qrcodeUrl, { type: "svg", margin: 1, width: 280 });
     return c.body(svg, 200, { "content-type": "image/svg+xml", "cache-control": "no-store" });
   });
 
-  app.get("/api/v1/sessions", (c) => {
-    const sessions = listAccounts(core.db).map((a) => ({
-      accountId: a.id,
-      label: a.label,
-      status: a.status,
-      pausedUntil: a.pausedUntil,
-      ownerUserId: a.ownerUserId,
-      baseUrl: a.baseUrl,
-      lastInboundAt: a.lastInboundAt,
-      lastError: a.lastError,
-      peers: listPeers(core.db, a.id).length,
-      activeSendkeys: listSendkeys(core.db, a.id).filter((k) => !k.revokedAt).length,
-      createdAt: a.createdAt,
-    }));
+  app.get("/api/v1/sessions", async (c) => {
+    const sessions = await Promise.all(
+      (await listAccounts(core.db)).map(async (a) => ({
+        accountId: a.id,
+        label: a.label,
+        status: a.status,
+        pausedUntil: a.pausedUntil,
+        ownerUserId: a.ownerUserId,
+        baseUrl: a.baseUrl,
+        lastInboundAt: a.lastInboundAt,
+        lastError: a.lastError,
+        warn: {
+          enabled: a.warnEnabled,
+          text: a.warnText,
+          leadSec: a.warnLeadSec,
+          warnedAt: a.warnedAt,
+        },
+        peers: (await listPeers(core.db, a.id)).length,
+        activeSendkeys: (await listSendkeys(core.db, a.id)).filter((k) => !k.revokedAt).length,
+        createdAt: a.createdAt,
+      })),
+    );
     return c.json({
       code: 0,
       sessions,
@@ -207,7 +218,7 @@ function mountAdmin(app: HonoApp, core: Core, wechat: WechatChannel): void {
 
   app.delete("/api/v1/sessions/:id", async (c) => {
     const id = c.req.param("id");
-    if (!getAccount(core.db, id)) return c.json({ code: 404, message: "account not found" }, 404);
+    if (!(await getAccount(core.db, id))) return c.json({ code: 404, message: "account not found" }, 404);
     await wechat.removeAccount(id);
     core.log.info("account unbound", { accountId: id });
     return c.json({ code: 0, message: "unbound" });
@@ -215,61 +226,121 @@ function mountAdmin(app: HonoApp, core: Core, wechat: WechatChannel): void {
 
   app.post("/api/v1/sessions/:id/reset-key", async (c) => {
     const id = c.req.param("id");
-    if (!getAccount(core.db, id)) return c.json({ code: 404, message: "account not found" }, 404);
+    if (!(await getAccount(core.db, id))) return c.json({ code: 404, message: "account not found" }, 404);
     const now = Date.now();
-    revokeSendkeys(core.db, id, now);
+    await revokeSendkeys(core.db, id, now);
     const key = generateSendkey();
-    createSendkey(core.db, { keyHash: sha256Hex(core.salt + ":" + key), accountId: id, now });
+    await createSendkey(core.db, { keyHash: sha256Hex(core.salt + ":" + key), accountId: id, now });
     core.log.info("sendkey reset", { accountId: id });
     return c.json({ code: 0, sendkey: key });
   });
 
-  app.get("/api/v1/admin/settings", (c) => {
+  // 24h 推送窗口临期提醒设置（整体替换：text/leadSec 传 null 恢复默认值）
+  app.put("/api/v1/sessions/:id/warn", async (c) => {
+    const id = c.req.param("id");
+    if (!(await getAccount(core.db, id))) return c.json({ code: 404, message: "account not found" }, 404);
+    const body = (await c.req.json().catch(() => ({}))) as {
+      enabled?: boolean;
+      text?: string | null;
+      leadSec?: number | string | null;
+    };
+    if (typeof body.enabled !== "boolean") return c.json({ code: 400, message: "enabled(boolean) required" }, 400);
+    let text: string | null = null;
+    if (body.text !== undefined && body.text !== null) {
+      text = String(body.text).trim();
+      if (text.length > 500) return c.json({ code: 400, message: "text 长度需 ≤500 字符" }, 400);
+      if (text === "") text = null;
+    }
+    const leadSec = normalizeWarnLeadSec(body.leadSec);
+    if (body.leadSec !== undefined && body.leadSec !== null && body.leadSec !== "" && leadSec === null) {
+      return c.json({ code: 400, message: "leadSec 必须是数字（秒）" }, 400);
+    }
+    await setWarnSettings(core.db, id, { enabled: body.enabled, text, leadSec }, Date.now());
+    core.log.info("warn settings updated", { accountId: id, enabled: body.enabled });
+    return c.json({ code: 0 });
+  });
+
+  app.get("/api/v1/admin/settings", async (c) => {
     return c.json({
       code: 0,
-      no_match_remind: getSetting(core.db, "no_match_remind") ?? "1",
-      no_match_text: getSetting(core.db, "no_match_text") ?? "",
+      no_match_remind: (await getSetting(core.db, "no_match_remind")) ?? "1",
+      no_match_text: (await getSetting(core.db, "no_match_text")) ?? "",
+      update_check_enabled: (await getSetting(core.db, "update_check_enabled")) ?? "1",
+      update_check_interval_sec: normalizeIntervalSec(await getSetting(core.db, "update_check_interval_sec")),
+      ingest_mode: core.cfg.ingestMode,
+      ondemand_harvest: core.cfg.ondemandHarvest,
+      poll_interval_sec: await effectivePollIntervalSec(core),
+      poll_last_wake_at: Number((await getSetting(core.db, "poll_last_wake_at")) ?? 0) || null,
     });
   });
 
   app.put("/api/v1/admin/settings", async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as { no_match_remind?: string; no_match_text?: string };
+    const body = (await c.req.json().catch(() => ({}))) as {
+      no_match_remind?: string;
+      no_match_text?: string;
+      update_check_enabled?: string;
+      update_check_interval_sec?: number | string;
+      poll_interval_sec?: number | string;
+    };
     if (body.no_match_remind !== undefined) {
       if (body.no_match_remind !== "0" && body.no_match_remind !== "1") {
         return c.json({ code: 400, message: "no_match_remind 只能是 0 或 1" }, 400);
       }
-      setSetting(core.db, "no_match_remind", body.no_match_remind);
+      await setSetting(core.db, "no_match_remind", body.no_match_remind);
     }
     if (body.no_match_text !== undefined) {
-      setSetting(core.db, "no_match_text", body.no_match_text.slice(0, 200));
+      await setSetting(core.db, "no_match_text", body.no_match_text.slice(0, 200));
+    }
+    if (body.update_check_enabled !== undefined) {
+      if (body.update_check_enabled !== "0" && body.update_check_enabled !== "1") {
+        return c.json({ code: 400, message: "update_check_enabled 只能是 0 或 1" }, 400);
+      }
+      await setSetting(core.db, "update_check_enabled", body.update_check_enabled);
+    }
+    if (body.update_check_interval_sec !== undefined) {
+      await setSetting(core.db, "update_check_interval_sec", String(normalizeIntervalSec(body.update_check_interval_sec)));
+    }
+    if (body.poll_interval_sec !== undefined) {
+      const n = Math.round(Number(body.poll_interval_sec));
+      if (!Number.isFinite(n)) return c.json({ code: 400, message: "poll_interval_sec 必须是数字（秒）" }, 400);
+      await setSetting(core.db, "poll_interval_sec", String(n));
     }
     return c.json({ code: 0 });
   });
 
-  app.get("/api/v1/admin/logs", (c) => {
+  app.get("/api/v1/admin/logs", async (c) => {
     const limit = Math.min(100, Math.max(1, Number(c.req.query("limit") ?? 30)));
     return c.json({
       code: 0,
-      inbound: listRecentInbound(core.db, limit),
-      push: listRecentPush(core.db, limit),
+      inbound: await listRecentInbound(core.db, limit),
+      push: await listRecentPush(core.db, limit),
     });
   });
 
-  // ---- 邮件桥（M5，可选功能） ----
+  // 入站收割（cron/do 模式）管理端手动触发：跳过节拍门控强制一轮
+  app.post("/api/v1/admin/ingest/poll-now", async (c) => {
+    if (core.cfg.ingestMode === "resident") {
+      return c.json({ code: 400, message: "resident 模式由常驻 monitor 实时收割，无需手动触发" }, 200);
+    }
+    const res = await pollNow(core, wechat);
+    return c.json({ code: 0, woken: res.woken, harvests: res.harvests, maintenance: res.maintenance });
+  });
 
-  app.get("/api/v1/admin/mail/:accountId", (c) => {
+  // ---- 邮件桥（M5，可选功能；Workers 形态不装配，端点返回 501） ----
+
+  app.get("/api/v1/admin/mail/:accountId", async (c) => {
     const accountId = c.req.param("accountId");
-    if (!getAccount(core.db, accountId)) return c.json({ code: 404, message: "account not found" }, 404);
-    return c.json({ code: 0, mail: core.mail?.view(accountId) ?? { enabled: false, configured: false } });
+    if (!(await getAccount(core.db, accountId))) return c.json({ code: 404, message: "account not found" }, 404);
+    return c.json({ code: 0, mail: (await core.mail?.view(accountId)) ?? { enabled: false, configured: false } });
   });
 
   app.put("/api/v1/admin/mail/:accountId", async (c) => {
     const accountId = c.req.param("accountId");
-    if (!getAccount(core.db, accountId)) return c.json({ code: 404, message: "account not found" }, 404);
+    if (!(await getAccount(core.db, accountId))) return c.json({ code: 404, message: "account not found" }, 404);
     if (!core.mail) return c.json({ code: 501, message: "邮件桥未装配" }, 200);
     const body = (await c.req.json().catch(() => ({}))) as Parameters<NonNullable<Core["mail"]>["saveConfig"]>[1];
     try {
-      core.mail.saveConfig(accountId, body);
+      await core.mail.saveConfig(accountId, body);
       return c.json({ code: 0 });
     } catch (err) {
       return c.json({ code: 400, message: String((err as Error).message) }, 200);
@@ -296,14 +367,14 @@ function mountAdmin(app: HonoApp, core: Core, wechat: WechatChannel): void {
     }
   });
 
-  app.get("/api/v1/admin/overview", (c) => {
+  app.get("/api/v1/admin/overview", async (c) => {
     const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
     return c.json({
       code: 0,
-      accounts: listAccounts(core.db).length,
-      keywords: core.db.select({ n: count() }).from(keywordsTable).get()?.n ?? 0,
-      outboxPending: core.db.select({ n: count() }).from(outboxTable).where(eq(outboxTable.status, "pending")).get()?.n ?? 0,
-      pushes24h: core.db.select({ n: count() }).from(pushLog).where(gte(pushLog.ts, dayAgo)).get()?.n ?? 0,
+      accounts: (await listAccounts(core.db)).length,
+      keywords: (await core.db.select({ n: count() }).from(keywordsTable).get())?.n ?? 0,
+      outboxPending: (await core.db.select({ n: count() }).from(outboxTable).where(eq(outboxTable.status, "pending")).get())?.n ?? 0,
+      pushes24h: (await core.db.select({ n: count() }).from(pushLog).where(gte(pushLog.ts, dayAgo)).get())?.n ?? 0,
     });
   });
 }
@@ -330,12 +401,12 @@ export function mountV1(app: HonoApp, core: Core, push: PushService, wechat: Wec
     if (!sendkeyPlain) return c.json({ code: 401, message: "admin token or sendkey required" }, 401);
     if (!body.title) return c.json({ code: 400, message: "title is required" }, 400);
 
-    const sk = findActiveSendkey(core.db, sha256Hex(core.salt + ":" + sendkeyPlain));
+    const sk = await findActiveSendkey(core.db, sha256Hex(core.salt + ":" + sendkeyPlain));
     if (!sk) return c.json({ code: 400, message: "bad sendkey" }, 400);
     if (!limiter.take(sk.id)) {
       return c.json({ code: 429, message: "rate limited" }, 429, { "Retry-After": String(limiter.retryAfterSec(sk.id)) });
     }
-    const account = getAccount(core.db, sk.accountId);
+    const account = await getAccount(core.db, sk.accountId);
     if (!account) return c.json({ code: 451, message: "推送账号不存在，请检查绑定" });
 
     const outcome = await push.push({

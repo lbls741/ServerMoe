@@ -1,0 +1,49 @@
+// Cloudflare Workers 部署配置（方案1：Cron 定时轮询）。
+// 首次部署：
+//   1. bun install
+//   2. wrangler d1 create servermoe   # 把返回的 database_id 填到下面
+//   3. wrangler deploy
+// 建议生产环境设置主密钥 secret（否则自动生成并入库）：
+//   wrangler secret put MOE_SECRET
+// 方案2（Durable Object，MOE_INGEST_MODE=do）所需的绑定见 README「Workers 部署」章节。
+
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "servermoe",
+  "main": "src/entries/worker.ts",
+  "compatibility_date": "2025-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "servermoe",
+      "database_id": "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+    }
+  ],
+  // 方案2（MOE_INGEST_MODE=do）使用；cron 模式下闲置无害
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "POLLER",
+        "class_name": "WechatPollerDO"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["WechatPollerDO"]
+    }
+  ],
+  // 固定每分钟触发；实际收割频率由 settings.poll_interval_sec 门控（管理页可改，无需重新部署）
+  "triggers": {
+    "crons": ["* * * * *"]
+  },
+  "vars": {
+    "MOE_INGEST_MODE": "cron",
+    "MOE_POLL_INTERVAL_SEC": "300"
+  },
+  "observability": {
+    "enabled": true
+  }
+}

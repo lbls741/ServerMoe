@@ -13,6 +13,8 @@ import { revokeSendkeys, createSendkey } from "../../repo/sendkeys.ts";
 import {
   ILINK_BOT_TYPE,
   ILINK_DEFAULT_BASE_URL,
+  LOGIN_POLL_DEBOUNCE_MS,
+  LOGIN_POLL_HOLD_MS,
   LOGIN_TOTAL_TTL_MS,
   QR_REFRESH_LIMIT,
 } from "./ilink/constants.ts";
@@ -28,6 +30,12 @@ export interface LoginDeps {
   salt: string;
   /** 默认登录/API 入口；仅测试注入 mock，生产固定 ilinkai.weixin.qq.com */
   baseUrl?: string;
+  /**
+   * 绑定状态机的推进方式：
+   * - driver（默认）：startLogin 启动进程内后台驱动，浏览器轮询只读 DB——常驻部署形态。
+   * - request：无常驻（Workers），由 pollLogin 每次调用推进一步（带防抖与有界 hold）。
+   */
+  pollMode?: "driver" | "request";
 }
 
 export class LoginError extends Error {
@@ -36,7 +44,7 @@ export class LoginError extends Error {
   }
 }
 
-// 每个登录会话一个服务端驱动（进程单例）。浏览器/API 只读写 DB，绝不直接驱动 iLink。
+// 每个登录会话一个服务端驱动（进程单例，仅 driver 模式）。浏览器/API 只读写 DB，绝不直接驱动 iLink。
 const loginDrivers = new Map<string, AbortController>();
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -61,8 +69,8 @@ function defaultBaseUrl(deps: LoginDeps): string {
   return deps.baseUrl ?? ILINK_DEFAULT_BASE_URL;
 }
 
-function localTokenList(deps: LoginDeps): string[] {
-  const rows = listAccounts(deps.db);
+async function localTokenList(deps: LoginDeps): Promise<string[]> {
+  const rows = await listAccounts(deps.db);
   const tokens: string[] = [];
   for (let i = rows.length - 1; i >= 0 && tokens.length < 10; i--) {
     const row = rows[i];
@@ -78,30 +86,31 @@ function localTokenList(deps: LoginDeps): string[] {
 
 async function refreshQr(deps: LoginDeps, row: LoginSessionRow): Promise<void> {
   const ctx = qrCtx(deps, row.pollHost ? `https://${row.pollHost}` : defaultBaseUrl(deps));
-  const qr = await fetchQrCode(ctx, ILINK_BOT_TYPE, localTokenList(deps));
-  updateLoginSession(deps.db, row.id, {
+  const qr = await fetchQrCode(ctx, ILINK_BOT_TYPE, await localTokenList(deps));
+  await updateLoginSession(deps.db, row.id, {
     qrcode: qr.qrcode,
     qrcodeUrl: qr.qrcode_img_content,
     refreshCount: row.refreshCount + 1,
     status: "wait",
+    lastPollAt: Date.now(),
     message: "二维码已刷新，请重新扫描",
   });
 }
 
-/** 发起绑定：取二维码落库并启动服务端驱动。返回会话 id 与二维码内容（URL，由上层渲染 SVG）。 */
+/** 发起绑定：取二维码落库并启动服务端驱动（request 模式下由 pollLogin 推进）。 */
 export async function startLogin(deps: LoginDeps): Promise<{ sessionId: string; qrcodeUrl: string }> {
   const ctx = qrCtx(deps, defaultBaseUrl(deps));
-  const qr = await fetchQrCode(ctx, ILINK_BOT_TYPE, localTokenList(deps));
+  const qr = await fetchQrCode(ctx, ILINK_BOT_TYPE, await localTokenList(deps));
   const id = randomId();
-  createLoginSession(deps.db, {
+  await createLoginSession(deps.db, {
     id,
     qrcode: qr.qrcode,
     qrcodeUrl: qr.qrcode_img_content,
     now: Date.now(),
     ttlMs: LOGIN_TOTAL_TTL_MS,
   });
-  driveLogin(deps, id);
-  deps.log.info("login session started", { sessionId: id });
+  if ((deps.pollMode ?? "driver") === "driver") driveLogin(deps, id);
+  deps.log.info("login session started", { sessionId: id, mode: deps.pollMode ?? "driver" });
   return { sessionId: id, qrcodeUrl: qr.qrcode_img_content };
 }
 
@@ -116,7 +125,7 @@ export function stopAllLoginDrivers(): void {
 }
 
 /**
- * 服务端驱动：唯一的状态轮询消费者。长轮询 iLink → 更新 DB → 处理刷新/迁移/配对码，
+ * 服务端驱动（driver 模式）：唯一的状态轮询消费者。长轮询 iLink → 更新 DB → 处理刷新/迁移/配对码，
  * 直到 confirmed/failed/超时。浏览器轮询接口只读本表，因此前端故障不影响绑定推进。
  */
 function driveLogin(deps: LoginDeps, sessionId: string): void {
@@ -127,7 +136,7 @@ function driveLogin(deps: LoginDeps, sessionId: string): void {
   void (async () => {
     const deadline = Date.now() + LOGIN_TOTAL_TTL_MS;
     while (!controller.signal.aborted && Date.now() < deadline) {
-      const row = getLoginSession(deps.db, sessionId);
+      const row = await getLoginSession(deps.db, sessionId);
       if (!row) break;
       if (row.status === "confirmed" || row.status === "failed") break;
       // 配对码门控：need_verifycode 且用户尚未提交数字时挂起等待（避免无谓轮询）
@@ -155,7 +164,7 @@ function driveLogin(deps: LoginDeps, sessionId: string): void {
       const action = await applyQrStatus(deps, row, resp);
       if (action === "stop") break;
       // 状态未变化时空转保护（长轮询会挂起，此分支覆盖 need_verifycode 等快速返回态）
-      const after = getLoginSession(deps.db, sessionId);
+      const after = await getLoginSession(deps.db, sessionId);
       if (after && after.status === before) {
         await sleep(1000, controller.signal).catch(() => null);
       }
@@ -163,6 +172,34 @@ function driveLogin(deps: LoginDeps, sessionId: string): void {
   })()
     .catch((err) => log.error("login driver crashed", { err: String(err) }))
     .finally(() => loginDrivers.delete(sessionId));
+}
+
+/**
+ * 请求驱动轮询（request 模式，Workers）：每次 pollLogin 推进一步。
+ * - confirmed/failed 直接返回；
+ * - need_verifycode 且未提交配对码时不打上游（与 driver 门控一致）；
+ * - 距上次上游轮询不足 LOGIN_POLL_DEBOUNCE_MS 直接返回（浏览器 1.2s 轮询不会堆积上游请求）；
+ * - 上游 hold 上限 LOGIN_POLL_HOLD_MS（短于服务端 35s），超时返回 wait。
+ */
+export async function pollLoginOnce(deps: LoginDeps, sessionId: string): Promise<LoginSessionRow> {
+  const row = await getLoginView(deps, sessionId);
+  if (row.status === "confirmed" || row.status === "failed") return row;
+  if (Date.now() >= row.expiresAt) return row;
+  if (row.status === "need_verifycode" && !row.verifyCode) return row;
+
+  const now = Date.now();
+  if (row.lastPollAt && now - row.lastPollAt < LOGIN_POLL_DEBOUNCE_MS) return row;
+  await updateLoginSession(deps.db, row.id, { lastPollAt: now });
+
+  const resp = await pollQrStatus(
+    qrCtx(deps, row.pollHost ? `https://${row.pollHost}` : defaultBaseUrl(deps)),
+    row.qrcode,
+    row.verifyCode ?? undefined,
+    undefined,
+    LOGIN_POLL_HOLD_MS,
+  );
+  await applyQrStatus(deps, row, resp);
+  return await getLoginView(deps, sessionId);
 }
 
 type ApplyResult = "continue" | "stop";
@@ -218,29 +255,29 @@ async function applyQrStatus(deps: LoginDeps, row: LoginSessionRow, resp: QrStat
       patch.userId = resp.ilink_user_id ?? "";
       patch.message = "绑定成功";
       deps.log.info("login confirmed", { botId: resp.ilink_bot_id });
-      updateLoginSession(deps.db, row.id, patch);
+      await updateLoginSession(deps.db, row.id, patch);
       return "stop";
     }
   }
-  if (Object.keys(patch).length > 0) updateLoginSession(deps.db, row.id, patch);
+  if (Object.keys(patch).length > 0) await updateLoginSession(deps.db, row.id, patch);
   return "continue";
 }
 
 /** 只读视图：登录会话当前状态（供 API 轮询，毫秒级返回）。 */
-export function getLoginView(deps: LoginDeps, sessionId: string): LoginSessionRow {
-  const row = getLoginSession(deps.db, sessionId);
+export async function getLoginView(deps: LoginDeps, sessionId: string): Promise<LoginSessionRow> {
+  const row = await getLoginSession(deps.db, sessionId);
   if (!row) throw new LoginError(404, "登录会话不存在");
   return row;
 }
 
 /** 提交手机上显示的配对数字；服务端驱动会在下一轮携带该码继续绑定。 */
-export function submitVerifyCode(deps: LoginDeps, sessionId: string, code: string): LoginSessionRow {
-  const row = getLoginView(deps, sessionId);
+export async function submitVerifyCode(deps: LoginDeps, sessionId: string, code: string): Promise<LoginSessionRow> {
+  const row = await getLoginView(deps, sessionId);
   if (row.status === "confirmed" || row.status === "failed") {
     throw new LoginError(409, `登录已结束（${row.status}）`);
   }
-  updateLoginSession(deps.db, sessionId, { verifyCode: code });
-  return getLoginSession(deps.db, sessionId)!;
+  await updateLoginSession(deps.db, sessionId, { verifyCode: code });
+  return (await getLoginSession(deps.db, sessionId))!;
 }
 
 export interface ConfirmResult {
@@ -251,14 +288,14 @@ export interface ConfirmResult {
 }
 
 /** 用已 confirmed 的登录会话落库账号并签发 sendkey（明文仅此一次返回）。 */
-export function confirmLogin(deps: LoginDeps, sessionId: string): ConfirmResult {
-  const row = getLoginView(deps, sessionId);
+export async function confirmLogin(deps: LoginDeps, sessionId: string): Promise<ConfirmResult> {
+  const row = await getLoginView(deps, sessionId);
   if (row.status !== "confirmed" || !row.botId || !row.tokenEnc) {
     throw new LoginError(409, `登录会话未确认（当前状态: ${row.status}）`);
   }
   stopLoginDriver(sessionId);
   const now = Date.now();
-  createAccount(deps.db, {
+  await createAccount(deps.db, {
     id: row.botId,
     tokenEnc: row.tokenEnc,
     baseUrl: row.baseUrl ?? defaultBaseUrl(deps),
@@ -266,10 +303,10 @@ export function confirmLogin(deps: LoginDeps, sessionId: string): ConfirmResult 
     now,
   });
   // 同一账号重新绑定：轮换 sendkey
-  revokeSendkeys(deps.db, row.botId, now);
+  await revokeSendkeys(deps.db, row.botId, now);
   const key = generateSendkey();
-  createSendkey(deps.db, { keyHash: sha256Hex(deps.salt + ":" + key), accountId: row.botId, now });
-  deleteLoginSession(deps.db, sessionId);
+  await createSendkey(deps.db, { keyHash: sha256Hex(deps.salt + ":" + key), accountId: row.botId, now });
+  await deleteLoginSession(deps.db, sessionId);
   deps.log.info("account bound", { accountId: row.botId, baseUrl: row.baseUrl });
   return { accountId: row.botId, sendkey: key, baseUrl: row.baseUrl ?? defaultBaseUrl(deps), ownerUserId: row.userId ?? "" };
 }
