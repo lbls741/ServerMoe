@@ -12,3 +12,5 @@ jobs:
       - run: bun run typecheck
       - run: bun run lint
       - run: bun test test/
+      - name: wrangler dry-run（Workers 打包校验）
+        run: bunx wrangler deploy --dry-run --outdir .wrangler-dry

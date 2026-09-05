@@ -7,9 +7,12 @@ research/
 *.db-shm
 .env
 .env.local
+.wrangler/
+.dev.vars
 *.log
 .DS_Store
 .zcode/
 AGENT.md
 docs/recon.md
 docs/dev-plan.md
+docs/codemap.md

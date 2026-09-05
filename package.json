@@ -1,6 +1,6 @@
 {
   "name": "servermoe",
-  "version": "0.1.1",
+  "version": "0.3.0",
   "description": "ServerMoe：私有部署微信消息网关，ServerChan 兼容推送 + 关键词路由",
   "license": "GPL-3.0-or-later",
   "private": true,
@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint src test",
     "test": "bun test test/",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "deploy": "wrangler deploy"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.2",
@@ -31,6 +32,7 @@
     "drizzle-kit": "^0.31.10",
     "eslint": "^10.9.1",
     "typescript": "~5.9.0",
-    "typescript-eslint": "^8.68.0"
+    "typescript-eslint": "^8.68.0",
+    "wrangler": "^4.129.0"
   }
 }

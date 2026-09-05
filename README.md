@@ -5,7 +5,7 @@
 同时支持**反向关键词路由**（微信里发指令 → 转发到你的应用 → 回复直达微信）、可选邮件桥、
 多用户与席位管理。
 
-> 单二进制/单容器运行，数据全在本机。个人自用、低频通知场景设计。
+> 单二进制/单容器运行，数据全在本机；也可一键部署到 **Cloudflare Workers**（免费额度内 Serverless，见「方式六」）。个人自用、低频通知场景设计。
 
 <p align="center">
   <img src="docs/images/client.jpg" alt="手机微信效果" width="760">
@@ -20,6 +20,8 @@
 - **反向关键词路由**：应用注册「关键词 → webhook」，微信发消息即触发，回复直达微信（HMAC 签名、5s 超时、失败回执）
 - **邮件桥（可选）**：IMAP 收信转微信、`mail:send` 关键词经 SMTP 发信
 - **多用户**：多微信号同时在线，每账号独立 sendkey/关键词/邮件配置，席位上限可控
+- **推送窗口临期提醒**：微信侧限制「用户 24h 内没发过消息则 bot 无法推送」，可按账号开启临期提醒（自定义文案与提前量），到期前自动请你回复一条消息续期窗口
+- **自动更新检测**：管理页按可调频率访问 GitHub Release，发现新版本即在页面顶部展开提示（自构建版自动跳过）
 - **免运维语义**：重启免重扫、掉线自动重试、二维码过期自动刷新、未预热推送排队自愈、token 失效熔断标记
 - **安全**：sendkey 仅存哈希、凭据 AES-256-GCM 加密落盘、webhook HMAC 签名、管理接口鉴权
 
@@ -34,6 +36,7 @@ curl http://localhost:8080/healthz
 ```
 
 管理页 `http://localhost:8080/`；未传 `MOE_ADMIN_TOKEN` 时首启会自动生成，`docker logs servermoe` 查看。
+无外网环境可用 Release 附带的镜像离线包（见「方式六：离线安装」）。
 
 ### 方式二：本地构建（Docker Compose）
 
@@ -44,12 +47,30 @@ docker compose up -d --build
 
 ### 方式三：裸 Linux 一键部署
 
-把项目目录上传到服务器，然后：
+一行命令安装（nvm 风格）。脚本先自动配置环境——安装 Bun、创建系统用户与数据目录、
+生成 `/etc/servermoe.env`——随后出现键盘菜单（↑/↓ 移动，Enter 确认）选择安装方式：
 
 ```bash
-sudo bash scripts/deploy.sh install    # 安装 Bun、创建 systemd 服务、启动并健康检查
-sudo bash scripts/deploy.sh update     # 更新代码并重启（数据保留）
-sudo bash scripts/deploy.sh uninstall  # 卸载（数据保留）
+curl -fsSL https://raw.githubusercontent.com/lbls741/ServerMoe/main/scripts/deploy.sh | sudo bash
+```
+
+- **从正式版安装**（默认选中）：访问 GitHub 获取最新 Release 并在终端显示版本号，下载随
+  Release 发布的运行时包（`servermoe-<tag>-runtime.tar.gz`，src + 生产依赖，免装依赖）安装，
+  自动注入 `MOE_VERSION` 以启用管理页的更新检测；
+- **从源码安装**：复用传统路径——使用当前目录已上传的项目源码（远程执行时自动 `git clone`），
+  `bun install` 后运行（自构建版，跳过更新检测）。
+
+也可非交互指定动作与方式：
+
+```bash
+sudo bash scripts/deploy.sh install release          # 从最新正式版安装
+sudo bash scripts/deploy.sh install release 0.2.1    # 安装指定版本
+sudo bash scripts/deploy.sh install source           # 从源码安装
+sudo bash scripts/deploy.sh update                   # 按首次安装的方式更新（正式版模式自动拉最新 Release）
+curl -fsSL https://raw.githubusercontent.com/lbls741/ServerMoe/main/scripts/deploy.sh | sudo bash -s update
+                                                     # 正式版模式远程更新（服务器上无需留源码）
+sudo bash scripts/deploy.sh status                   # 服务状态与健康检查
+sudo bash scripts/deploy.sh uninstall                # 卸载（数据保留）
 ```
 
 细节见脚本头部注释。数据落在 `/var/lib/servermoe`，配置在 `/etc/servermoe.env`。
@@ -59,8 +80,58 @@ sudo bash scripts/deploy.sh uninstall  # 卸载（数据保留）
 ```bash
 bun install
 bun run dev            # http://localhost:8080（--hot 热重载）
-bun test test/         # 71 项测试
+bun test test/         # 102 项测试
 bun run typecheck && bun run lint
+```
+
+### 方式五：Cloudflare Workers（免费额度内 Serverless）
+
+无服务器形态：HTTP API 跑在 Workers 上，状态（账号凭据/游标/日志）存 **D1**，
+微信侧消息靠**定时收割**获得（iLink 协议没有回调机制，详见「入站轮询」）。
+
+```bash
+bun install
+bunx wrangler d1 create servermoe   # 把返回的 database_id 填入 wrangler.jsonc
+bunx wrangler secret put MOE_SECRET # 建议显式设置主密钥（跳过则自动生成并入库，安全性弱一档）
+bun run deploy                      # = wrangler deploy（首次部署自动建表，幂等 DDL）
+```
+
+部署完成后打开 `https://servermoe.<你的子域>.workers.dev/` 进入管理页，绑定流程与自部署完全一致。
+
+**入站轮询**（管理页「入站轮询」区可改间隔，无需重新部署）：
+
+| 策略 | `MOE_INGEST_MODE` | 机制 | 最低间隔 |
+|---|---|---|---|
+| 定时收割（默认） | `cron` | Cron Trigger 每分钟唤醒，按设置间隔门控收割 | 60 秒 |
+| Durable Object | `do` | 每个 bot 账号一个 DO 单例，alarm 链自驱收割 | 10 秒 |
+| 按需收割（叠加） | `MOE_ONDEMAND_HARVEST=on` | 未预热时推送前抢租约做一次 ≤5s 短收割，收到消息即重试发送 | — |
+
+**免费额度速算**（Cloudflare Free，均为量级估算）：
+
+- cron 每分钟触发 ≈ 1,440 请求/天 ≪ 100,000 请求/天；
+- 游标/节拍戳/限频桶写入 D1 ≈ 每天数千行 ≪ D1 免费额度（100,000 写/天）。**不使用 KV**——其免费额度仅 1,000 写/天，1 分钟级轮询反而必超；D1 让「免费计划跑 1 分钟级收割」没有额度压力，频率只影响捕获延迟；
+- `do` 模式 DO duration：active 时长 ≈ 收割挂起时长。60s 间隔 ≈ 6,300 GB-s/天（免费 13,000 内），300s 间隔 ≈ 1,260；连续长轮询的常驻模式 ≈ 10,800 GB-s/天（占 83%），故默认用 alarm 链而非常驻。
+
+**与自部署的能力差异**：邮件桥不可用（IMAP/SMTP 长连接，相关端点返回 501）；更新检测无意义（部署即最新版本）；限频用 D1 持久令牌桶（多隔离体共享计数）。自部署两种形态的差异在配置层自动收敛：`MOE_INGEST_MODE` 设错方向时自动回退并告警。
+
+### 方式六：离线安装（GitHub Release 产物）
+
+每个 Release 附带两类产物，适合无外网的服务器或供部署脚本下载：
+
+| 产物 | 用途 |
+|---|---|
+| `servermoe-<tag>-docker-amd64.tar.gz` | Docker 镜像离线包（linux/amd64），`docker load` 直接导入 |
+| `servermoe-<tag>-docker-arm64.tar.gz` | Docker 镜像离线包（linux/arm64，适用于树莓派 / ARM 服务器 / NAS），同上 |
+| `servermoe-<tag>-runtime.tar.gz` | 运行时包：`src` + 生产依赖（不含文档/测试），架构无关，解压后由 Bun 直接运行，无需再装依赖 |
+
+```bash
+# Docker 离线导入（uname -m 确认架构：x86_64 → amd64，aarch64 → arm64）
+docker load -i servermoe-<tag>-docker-<arch>.tar.gz
+docker run -d --name servermoe -p 8080:8080 -v servermoe-data:/data lbls741/servermoe:<tag>
+
+# 裸机运行时包（需 Bun ≥ 1.4）
+tar xzf servermoe-<tag>-runtime.tar.gz            # 解出 servermoe/
+cd servermoe && MOE_VERSION=<tag> bun run src/index.ts
 ```
 
 ## 初始化流程
@@ -68,6 +139,7 @@ bun run typecheck && bun run lint
 1. 打开管理页 `http://<host>:8080/`，填入 `SSC_ADMIN_TOKEN` 保存；
 2. 「生成绑定二维码」→ 手机微信（8.0.70+）扫码 → 如有配对数字则填入 → 完成绑定，**保存 sendkey**（仅显示一次）；
 3. **预热**：在微信里给 ClawBot 发任意一条消息（推送的前置要求，未预热会排队自动补发）；
+   微信侧还要求**每 24 小时内至少回复一条消息**，否则推送窗口过期（可在管理页账号区开启「临期提醒」）；
 4. 用任意语言一行请求推送：
 
 ```bash
@@ -104,6 +176,22 @@ curl "http://<host>:8080/MOExxxxxxxx.send?title=构建完成&desp=**耗时** 3s"
 | `SSC_SEND_RATE_PER_HOUR` / `SSC_SEND_BURST` | 60 / 10 | 每 sendkey 限频 |
 | `SSC_SEAT_LIMIT` | 5 | 可绑定账号数上限 |
 | `SSC_LOG_LEVEL` / `SSC_BOT_AGENT` | info / ServerMoe | 日志级别 / 出站观测标识 |
+| `MOE_VERSION` | 空（自构建） | 构建期版本号；官方镜像由 Release 流程注入。**为空即视为自构建版，跳过更新检测** |
+| `MOE_UPDATE_REPO` | `lbls741/ServerMoe` | 更新检测指向的 GitHub 仓库（fork 用户可改指自己的镜像仓库） |
+| `MOE_INGEST_MODE` | `resident` | 入站收割策略：`resident`（自部署常驻 monitor）/ `cron`（Workers 定时收割）/ `do`（Workers Durable Object）。设错方向自动回退并告警 |
+| `MOE_POLL_INTERVAL_SEC` | 300 | 定时收割默认间隔（秒）。实际生效值以管理页「入站轮询」设置优先（60s–24h；do 模式可低至 10s） |
+| `MOE_ONDEMAND_HARVEST` | `off` | 按需收割（方案3，`on`/`off`）：未预热时推送前自动短收割刷新 context_token（仅 cron/do 模式生效） |
+
+## 版本与更新检测
+
+- 管理页每次请求后端时，若「自动检测」开启且距上次检测超过阈值（默认 24h，可在管理页
+  「版本与更新」区调整为 1 小时～每周），后端访问 GitHub Release API 查询 latest 版本号；
+- 发现新版本时，管理页顶部会以展开动画显示「更新可用」窗格（当前版本、最新版本、跳转
+  Release 页按钮）；GitHub 访问失败时展示「更新检测失败」提示；
+- **自构建版**（未注入 `MOE_VERSION`，如源码运行、compose 本地构建）完全跳过检测逻辑，
+  管理页长期展示「自构建版本，更新检测不可用」。裸金属源码部署（deploy.sh）也属自构建，
+  如需更新检测可手动在 `/etc/servermoe.env` 中加入 `MOE_VERSION=<版本号>`；
+- 检测结果落盘（`data` 卷），重启后在阈值内不重复请求；检测失败同样计入检测间隔，不会逐请求重试。
 
 ## 运维与故障恢复
 
@@ -113,6 +201,7 @@ curl "http://<host>:8080/MOExxxxxxxx.send?title=构建完成&desp=**耗时** 3s"
 | 消息重复投递 | 按 `message_id` 去重，bot 自身回显自动忽略 |
 | 未预热推送 | 返回 `code 450` 并进入 outbox，预热后自动补发（≤5 次/24h） |
 | bot_token 失效（errcode -14） | 熔断暂停 1 小时并标记 `rebind_needed`，管理页重新扫码即可 |
+| 24h 推送窗口过期 | 用户回复任意消息即自动恢复（无需重扫）；期间推送按 `code 450` 入 outbox；可开启「临期提醒」在到期前收到提醒消息 |
 | 二维码过期 | 自动刷新（≤3 次）；多次失败终止会话，重新发起 |
 | 日志保留 | push/inbound 日志默认保留 30 天，超时自动清理 |
 
@@ -133,18 +222,21 @@ curl "http://<host>:8080/MOExxxxxxxx.send?title=构建完成&desp=**耗时** 3s"
 
 ```
 src/
-  channels/wechat/   iLink 协议层 + 绑定状态机 + 收信 monitor + 发送（唯一感知协议处）
-  api/               ServerChan 兼容层 + /api/v1 管理 API + 限频
+  channels/wechat/   iLink 协议层 + 绑定状态机 + 收信收割（harvest）+ 发送（唯一感知协议处）
+  core/ingest.ts     入站收割调度：cron 节拍门控 / DO alarm / 按需收割租约
+  api/               ServerChan 兼容层 + /api/v1 管理 API + 限频（内存桶 / D1 桶）
   router/            关键词匹配、webhook 转发、内置命令、入站路由
-  mail/              邮件桥（IMAP 轮询 / SMTP 发信，后端可注入）
+  mail/              邮件桥（IMAP 轮询 / SMTP 发信，后端可注入；仅自部署装配）
   web/               管理页（零构建 SSR）
-  db/ repo/          SQLite（Drizzle）与数据访问
+  db/ repo/          SQLite（Drizzle）：自部署 bun:sqlite / Workers D1，同一 schema
+  runtime/ entries/  装配层 + 两个平台入口（src/index.ts=Bun、entries/worker.ts=Workers+DO）
 examples/keyword-receiver/   开发者接入 demo（零依赖 Node.js）
 docs/integration.md          反向控制接入文档
 scripts/deploy.sh            裸 Linux 一键部署
+wrangler.jsonc               Cloudflare Workers 部署配置（D1 + Cron + DO）
 ```
 
-技术栈：Bun + Hono + SQLite（bun:sqlite / Drizzle）+ TypeScript，全部依赖 MIT。
+技术栈：Bun / Cloudflare Workers + Hono + SQLite（bun:sqlite / D1，Drizzle）+ TypeScript。
 
 ## 开源协议
 
