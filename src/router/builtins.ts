@@ -21,7 +21,7 @@ export function isReserved(keyword: string): boolean {
   return (RESERVED_KEYWORDS as readonly string[]).includes(keyword.trim().toLowerCase());
 }
 
-export function builtinReply(cmd: string, ctx: BuiltinContext): string | null {
+export async function builtinReply(cmd: string, ctx: BuiltinContext): Promise<string | null> {
   switch (cmd) {
     case "help":
       return helpText(ctx);
@@ -46,17 +46,17 @@ function helpText(ctx: BuiltinContext): string {
   return lines.join("\n");
 }
 
-function statusText(ctx: BuiltinContext): string {
+async function statusText(ctx: BuiltinContext): Promise<string> {
   const now = Date.now();
-  expireOutbox(ctx.db, now);
+  await expireOutbox(ctx.db, now);
   const dayAgo = now - 24 * 60 * 60 * 1000;
-  const pushes24h = ctx.db.select({ n: count() }).from(pushLog).where(gte(pushLog.ts, dayAgo)).get()?.n ?? 0;
-  const outboxPending = listPendingOutbox(ctx.db, ctx.account.id, ctx.account.ownerUserId).length;
+  const pushes24h = (await ctx.db.select({ n: count() }).from(pushLog).where(gte(pushLog.ts, dayAgo)).get())?.n ?? 0;
+  const outboxPending = (await listPendingOutbox(ctx.db, ctx.account.id, ctx.account.ownerUserId)).length;
   const lastInbound = ctx.account.lastInboundAt ? new Date(ctx.account.lastInboundAt).toLocaleString("zh-CN") : "无";
   return [
     `账号: ${ctx.account.id}`,
     `状态: ${ctx.account.status}`,
-    `预热用户: ${listPeers(ctx.db, ctx.account.id).length}`,
+    `预热用户: ${(await listPeers(ctx.db, ctx.account.id)).length}`,
     `关键词: ${ctx.keywords.filter((k) => k.enabled).length} 个`,
     `24h 推送: ${pushes24h} 条`,
     `待补发(预热队列): ${outboxPending} 条`,

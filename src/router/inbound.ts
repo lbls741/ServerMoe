@@ -17,7 +17,7 @@ export function createInboundRouter(core: Core) {
 
   async function handle(accountId: string, fromUserId: string, text: string, msgId?: string): Promise<void> {
     const db = core.db;
-    const account = getAccount(db, accountId);
+    const account = await getAccount(db, accountId);
     if (!account || !text.trim()) return;
     const ch = core.channels.get("wechat");
     if (!ch) return;
@@ -38,23 +38,23 @@ export function createInboundRouter(core: Core) {
         ? await core.mail.handleCommand(accountId, trimmed)
         : "邮件桥未启用。";
       const ok = await reply(text);
-      addInboundLog(db, { ts: now, accountId, fromUserId, text: trimmed, action: "builtin", reply: ok ? text : null });
+      await addInboundLog(db, { ts: now, accountId, fromUserId, text: trimmed, action: "builtin", reply: ok ? text : null });
       return;
     }
 
     // 1. 内置命令（保留字，exact 语义，最高优先级）
     const lower = trimmed.toLowerCase();
     if (isReserved(lower)) {
-      const text = builtinReply(lower, { account, db, keywords: listKeywords(db, accountId) });
+      const text = await builtinReply(lower, { account, db, keywords: await listKeywords(db, accountId) });
       if (text) {
         const ok = await reply(text);
-        addInboundLog(db, { ts: now, accountId, fromUserId, text: trimmed, action: "builtin", reply: ok ? text : null });
+        await addInboundLog(db, { ts: now, accountId, fromUserId, text: trimmed, action: "builtin", reply: ok ? text : null });
         return;
       }
     }
 
     // 2. 关键词匹配 → webhook 转发
-    const keywords = listKeywords(db, accountId).filter((k) => k.enabled);
+    const keywords = (await listKeywords(db, accountId)).filter((k) => k.enabled);
     const hit = matchKeyword(trimmed, keywords);
     if (hit) {
       const result = await forwarder.forward(hit.url, hit.secretEnc, {
@@ -78,7 +78,7 @@ export function createInboundRouter(core: Core) {
         action = "forwarded";
       }
       const ok = await reply(replyText);
-      addInboundLog(db, {
+      await addInboundLog(db, {
         ts: Date.now(),
         accountId,
         fromUserId,
@@ -91,9 +91,9 @@ export function createInboundRouter(core: Core) {
     }
 
     // 3. 未命中 → 可配置提醒（settings.no_match_remind = "0" 关闭）
-    addInboundLog(db, { ts: now, accountId, fromUserId, text: trimmed, action: "no_match" });
-    if (getSetting(db, "no_match_remind") !== "0") {
-      const remindText = getSetting(db, "no_match_text") || DEFAULT_NO_MATCH_TEXT;
+    await addInboundLog(db, { ts: now, accountId, fromUserId, text: trimmed, action: "no_match" });
+    if ((await getSetting(db, "no_match_remind")) !== "0") {
+      const remindText = (await getSetting(db, "no_match_text")) || DEFAULT_NO_MATCH_TEXT;
       await reply(remindText).catch(() => {});
     }
   }

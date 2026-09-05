@@ -126,11 +126,11 @@ export function createMailService(core: Core, push: PushService, deps: MailBacke
   const pollers = new Map<string, AbortController>();
   const log = core.log.child({ mod: "mail" });
 
-  function configOf(accountId: string): MailConfig | undefined {
-    const row = getMailConfigRow(core.db, accountId);
+  async function configOf(accountId: string): Promise<MailConfig | undefined> {
+    const row = await getMailConfigRow(core.db, accountId);
     if (!row) return undefined;
     try {
-      return decryptMailConfig(core.db, core.masterKey, row);
+      return decryptMailConfig(row, core.masterKey);
     } catch {
       log.error("mail config decrypt failed", { accountId });
       return undefined;
@@ -146,11 +146,11 @@ export function createMailService(core: Core, push: PushService, deps: MailBacke
 
   /** 单次 IMAP 轮询：拉新邮件 → 缓存 → 推送摘要。返回新邮件数。 */
   async function pollOnce(accountId: string): Promise<number> {
-    const cfg = configOf(accountId);
+    const cfg = await configOf(accountId);
     if (!cfg) return 0;
     try {
       const result = await imapFetch(cfg.imap, cfg.lastUid ?? null, cfg.uidValidity ?? null);
-      updateMailState(core.db, accountId, {
+      await updateMailState(core.db, accountId, {
         uidValidity: result.uidValidity,
         lastUid: result.maxUid,
         lastPollAt: Date.now(),
@@ -158,7 +158,7 @@ export function createMailService(core: Core, push: PushService, deps: MailBacke
       });
       for (const m of result.messages) {
         pushCache(accountId, m);
-        const account = getAccount(core.db, accountId);
+        const account = await getAccount(core.db, accountId);
         const peer = account?.ownerUserId;
         if (peer) {
           await push.push({
@@ -171,15 +171,15 @@ export function createMailService(core: Core, push: PushService, deps: MailBacke
       }
       return result.messages.length;
     } catch (err) {
-      updateMailState(core.db, accountId, { lastPollAt: Date.now(), lastError: String(err).slice(0, 200) });
+      await updateMailState(core.db, accountId, { lastPollAt: Date.now(), lastError: String(err).slice(0, 200) });
       log.warn("imap poll failed", { accountId, err: String(err).slice(0, 120) });
       return 0;
     }
   }
 
-  function startPoller(accountId: string): void {
+  async function startPoller(accountId: string): Promise<void> {
     stopPoller(accountId);
-    const cfg = configOf(accountId);
+    const cfg = await configOf(accountId);
     if (!cfg?.enabled) return;
     const controller = new AbortController();
     pollers.set(accountId, controller);
@@ -202,12 +202,12 @@ export function createMailService(core: Core, push: PushService, deps: MailBacke
     pollers.delete(accountId);
   }
 
-  function startAll(): void {
-    for (const id of listEnabledMailAccounts(core.db)) startPoller(id);
+  async function startAll(): Promise<void> {
+    for (const id of await listEnabledMailAccounts(core.db)) await startPoller(id);
   }
 
-  function restart(accountId: string): void {
-    startPoller(accountId); // startPoller 内部先 stop，且 disabled 时不启动
+  async function restart(accountId: string): Promise<void> {
+    await startPoller(accountId); // startPoller 内部先 stop，且 disabled 时不启动
   }
 
   async function shutdown(): Promise<void> {
@@ -217,8 +217,8 @@ export function createMailService(core: Core, push: PushService, deps: MailBacke
 
   // ---- 配置持久化（供 admin API 使用） ----
 
-  function view(accountId: string) {
-    const row = getMailConfigRow(core.db, accountId);
+  async function view(accountId: string) {
+    const row = await getMailConfigRow(core.db, accountId);
     if (!row) return { enabled: false, configured: false };
     return {
       enabled: row.enabled,
@@ -233,14 +233,14 @@ export function createMailService(core: Core, push: PushService, deps: MailBacke
     };
   }
 
-  function saveConfig(accountId: string, body: {
+  async function saveConfig(accountId: string, body: {
     enabled?: boolean;
     pollSec?: number;
     from?: string;
     imap?: Partial<MailServerConfig>;
     smtp?: Partial<MailServerConfig>;
-  }): void {
-    const existing = configOf(accountId);
+  }): Promise<void> {
+    const existing = await configOf(accountId);
     const merge = (old?: MailServerConfig, next?: Partial<MailServerConfig>): MailServerConfig => ({
       host: next?.host ?? old?.host ?? "",
       port: next?.port ?? old?.port ?? 993,
@@ -250,7 +250,7 @@ export function createMailService(core: Core, push: PushService, deps: MailBacke
     });
     const imap = merge(existing?.imap, body.imap);
     const smtp = merge(existing?.smtp, body.smtp);
-    upsertMailConfig(core.db, {
+    await upsertMailConfig(core.db, {
       accountId,
       imapEnc: encryptString(core.masterKey, JSON.stringify(imap)),
       smtpEnc: encryptString(core.masterKey, JSON.stringify(smtp)),
@@ -258,25 +258,25 @@ export function createMailService(core: Core, push: PushService, deps: MailBacke
       pollSec: body.pollSec ?? existing?.pollSec ?? 60,
       enabled: body.enabled ?? existing?.enabled ?? true,
     });
-    restart(accountId);
+    await restart(accountId);
   }
 
   async function removeConfig(accountId: string): Promise<void> {
     stopPoller(accountId);
     cache.delete(accountId);
-    deleteMailConfig(core.db, accountId);
+    await deleteMailConfig(core.db, accountId);
   }
 
   async function sendTest(accountId: string, to: string): Promise<void> {
-    const cfg = configOf(accountId);
+    const cfg = await configOf(accountId);
     if (!cfg) throw new Error("邮件桥未配置");
     await smtpSend(cfg.smtp, cfg.from, { to, subject: "ServerMoe SMTP 测试", body: `这是一封测试邮件，发自网关 (${randomId().slice(0, 8)})。` });
   }
 
   // ---- `mail` 关键词命令 ----
 
-  function handleCommand(accountId: string, text: string): string {
-    const cfg = configOf(accountId);
+  async function handleCommand(accountId: string, text: string): Promise<string> {
+    const cfg = await configOf(accountId);
     const m = text.match(/^mail(?::|\s+)?(.*)$/i);
     const rest = (m?.[1] ?? "").trim();
 
@@ -305,7 +305,7 @@ export function createMailService(core: Core, push: PushService, deps: MailBacke
     }
 
     if (lower === "status") {
-      const row = getMailConfigRow(core.db, accountId);
+      const row = await getMailConfigRow(core.db, accountId);
       return [
         `邮件桥: ${cfg.enabled ? "已启用" : "已停用"}`,
         `IMAP: ${cfg.imap.user}@${cfg.imap.host}`,

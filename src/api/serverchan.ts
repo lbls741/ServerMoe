@@ -67,13 +67,13 @@ export function mountServerchan(app: Hono, core: Core, push: PushService, limite
     if (!spec.endsWith(".send")) return c.json({ code: 404, message: "not found" }, 404);
     const key = spec.slice(0, -".send".length);
 
-    const sk = findActiveSendkey(core.db, sha256Hex(core.salt + ":" + key));
+    const sk = await findActiveSendkey(core.db, sha256Hex(core.salt + ":" + key));
     if (!sk) return c.json({ code: 400, message: "bad sendkey" }, 400);
 
     if (!limiter.take(sk.id)) {
       return c.json({ code: 429, message: "rate limited" }, 429, { "Retry-After": String(limiter.retryAfterSec(sk.id)) });
     }
-    touchSendkey(core.db, sk.id, Date.now());
+    await touchSendkey(core.db, sk.id, Date.now());
 
     let params: SendParams;
     try {
@@ -83,7 +83,7 @@ export function mountServerchan(app: Hono, core: Core, push: PushService, limite
     }
     if (!params.title) return c.json({ code: 400, message: "title is required" }, 400);
 
-    const account = getAccount(core.db, sk.accountId);
+    const account = await getAccount(core.db, sk.accountId);
     if (!account) return c.json({ code: 451, message: "推送账号不存在，请检查绑定" }, 200);
 
     const ip = c.req.header("x-forwarded-for") ?? c.req.header("x-real-ip") ?? null;
