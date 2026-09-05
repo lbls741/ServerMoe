@@ -1,11 +1,14 @@
-// Cloudflare Workers 部署配置（方案1：Cron 定时轮询）。
-// 首次部署：
+// Cloudflare Workers 部署配置。
+// ── 一键部署（推荐）── README 顶部的 Deploy to Cloudflare 按钮：
+//   Cloudflare 会克隆仓库到你的 GitHub 账号，读取本配置自动创建 D1 与 Durable Object
+//   （并把真实 resource_id 写回你仓库里的这份文件），密钥/变量在配置界面一次填完，
+//   之后每次 git push 由 Workers Builds 自动构建部署。
+// ── 手动部署 ──
 //   1. bun install
 //   2. wrangler d1 create servermoe   # 把返回的 database_id 填到下面
 //   3. wrangler deploy
 // 建议生产环境设置主密钥 secret（否则自动生成并入库）：
 //   wrangler secret put MOE_SECRET
-// 方案2（Durable Object，MOE_INGEST_MODE=do）所需的绑定见 README「Workers 部署」章节。
 
 {
   "$schema": "node_modules/wrangler/config-schema.json",
@@ -17,10 +20,12 @@
     {
       "binding": "DB",
       "database_name": "servermoe",
+      // 一键部署时由 Cloudflare 自动预置并回填真实 ID；手动部署时替换为
+      // `wrangler d1 create servermoe` 返回的 database_id
       "database_id": "REPLACE_WITH_YOUR_D1_DATABASE_ID"
     }
   ],
-  // 方案2（MOE_INGEST_MODE=do）使用；cron 模式下闲置无害
+  // 方案2（MOE_INGEST_MODE=do）使用；cron 模式下闲置无害。一键部署时自动预置
   "durable_objects": {
     "bindings": [
       {
@@ -41,7 +46,9 @@
   },
   "vars": {
     "MOE_INGEST_MODE": "cron",
-    "MOE_POLL_INTERVAL_SEC": "300"
+    "MOE_POLL_INTERVAL_SEC": "300",
+    // 留空 = 自构建版，跳过更新检测；想启用可填部署版本号（如 0.3.0）
+    "MOE_VERSION": ""
   },
   "observability": {
     "enabled": true

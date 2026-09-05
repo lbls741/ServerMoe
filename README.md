@@ -5,7 +5,11 @@
 同时支持**反向关键词路由**（微信里发指令 → 转发到你的应用 → 回复直达微信）、可选邮件桥、
 多用户与席位管理。
 
-> 单二进制/单容器运行，数据全在本机；也可一键部署到 **Cloudflare Workers**（免费额度内 Serverless，见「方式六」）。个人自用、低频通知场景设计。
+> 单二进制/单容器运行，数据全在本机；也可一键部署到 **Cloudflare Workers**（免费额度内 Serverless，见「方式五」）。个人自用、低频通知场景设计。
+
+<p align="center">
+  <a href="https://deploy.workers.cloudflare.com/?url=https://github.com/lbls741/ServerMoe"><img src="https://deploy.workers.cloudflare.com/button" alt="Deploy to Cloudflare"/></a>
+</p>
 
 <p align="center">
   <img src="docs/images/client.jpg" alt="手机微信效果" width="760">
@@ -88,6 +92,15 @@ bun run typecheck && bun run lint
 
 无服务器形态：HTTP API 跑在 Workers 上，状态（账号凭据/游标/日志）存 **D1**，
 微信侧消息靠**定时收割**获得（iLink 协议没有回调机制，详见「入站轮询」）。
+
+**一键部署（推荐）**：点击下方按钮 → 授权 GitHub（Cloudflare 会克隆仓库到你的账号）→
+在一个界面里填完密钥与收割策略 → D1 数据库与 Durable Object **自动创建**并部署完成；
+之后每次 `git push` 自动构建部署。逐项配置说明、免费额度速算与常见问题见
+**[docs/deploy-cloudflare.md](docs/deploy-cloudflare.md)**。
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/lbls741/ServerMoe)
+
+**手动部署**（需要指定自己的 D1 database_id 时）：
 
 ```bash
 bun install

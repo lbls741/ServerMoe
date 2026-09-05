@@ -15,6 +15,34 @@
     "db:generate": "drizzle-kit generate",
     "deploy": "wrangler deploy"
   },
+  "cloudflare": {
+    "bindings": {
+      "DB": {
+        "description": "D1 数据库（**自动创建**）：存储账号凭据、收信游标、日志。等价于自部署形态的 SQLite 文件。"
+      },
+      "POLLER": {
+        "description": "Durable Object 命名空间（**自动创建**）：`MOE_INGEST_MODE=do` 时按 bot 账号单例 alarm 链收割微信消息；cron 模式闲置无害。"
+      },
+      "MOE_SECRET": {
+        "description": "**建议填写**：加密账号凭据的主密钥。用 `openssl rand -hex 32` 生成；留空则自动生成并入库（数据库泄露即凭据可解密，安全性弱一档）。"
+      },
+      "MOE_ADMIN_TOKEN": {
+        "description": "管理页与管理 API 令牌。留空则首次启动自动生成，需在部署日志中查看。"
+      },
+      "MOE_INGEST_MODE": {
+        "description": "入站收割策略：`cron`（默认，Cron Trigger 每分钟唤醒、按间隔门控）/ `do`（Durable Object alarm 链，最低 10 秒、捕获更及时）。"
+      },
+      "MOE_POLL_INTERVAL_SEC": {
+        "description": "定时收割默认间隔（秒，60–86400）。实际以管理页「入站轮询」设置优先，改频率无需重新部署。"
+      },
+      "MOE_ONDEMAND_HARVEST": {
+        "description": "`on`/`off`：推送遇未预热时，先抢租约做一次 ≤5s 短收割刷新 context_token 再重试发送。"
+      },
+      "MOE_VERSION": {
+        "description": "部署版本号（如 `0.3.0`）；留空视为自构建版并跳过更新检测。"
+      }
+    }
+  },
   "dependencies": {
     "drizzle-orm": "^0.45.2",
     "hono": "^4.13.5",
