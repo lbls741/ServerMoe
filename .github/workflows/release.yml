@@ -1,7 +1,9 @@
 name: release
 
 # 推送形如 0.1.0 / v0.1.0 的 tag 时触发：
-# 质量门禁 → 构建镜像 → 推送 Docker Hub（<tag> 与 latest）→ 创建 GitHub Release
+# 质量门禁 → 打包运行时产物（产出1：src + 生产依赖，架构无关、解压即用，供裸机部署脚本）
+# → amd64 / arm64 双原生 runner 分别构建镜像、冒烟并导出离线包（产出2，全程无 QEMU 模拟）
+# → 合并多架构 manifest 推送 Docker Hub → 创建 GitHub Release（附全部产物）
 on:
   push:
     tags: ["v*", "*.*.*"]
@@ -9,8 +11,12 @@ on:
 permissions:
   contents: write
 
+env:
+  TAG: ${{ github.ref_name }}
+  IMAGE: ${{ github.repository_owner }}/servermoe
+
 jobs:
-  release:
+  package:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,32 +31,216 @@ jobs:
           bun run typecheck
           bun test test/
 
+      - name: 打包运行时产物（src + 生产依赖，不含文档/测试）
+        run: |
+          # 在独立目录安装生产依赖，不污染质量门禁用的完整 node_modules
+          mkdir -p dist/stage
+          cp package.json bun.lock dist/stage/
+          (cd dist/stage && bun install --frozen-lockfile --production)
+          # 组装运行时包：源码 + 生产依赖 + 许可文本（GPL 二进制分发要求携带）
+          mkdir -p dist/servermoe
+          cp -r src dist/servermoe/src
+          cp -r dist/stage/node_modules dist/servermoe/node_modules
+          cp package.json LICENSE THIRD-PARTY-NOTICES.md dist/servermoe/
+          tar -czf "dist/servermoe-${TAG}-runtime.tar.gz" -C dist servermoe
+          ls -lh dist
+
+      - name: 运行时产物冒烟测试（免装依赖直接启动）
+        run: |
+          cd dist/servermoe
+          MOE_DATA_DIR=/tmp/moe-smoke MOE_PORT=18099 bun run src/index.ts > /tmp/moe-smoke.log 2>&1 &
+          pid=$!
+          ok=""
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:18099/healthz > /dev/null 2>&1; then ok=1; break; fi
+            sleep 1
+          done
+          kill "$pid" 2>/dev/null || true
+          if [ -z "$ok" ]; then
+            echo "::error::运行时产物冒烟测试失败"
+            cat /tmp/moe-smoke.log
+            exit 1
+          fi
+          echo "运行时产物冒烟测试通过"
+
+      - name: 上传运行时产物（双架构镜像使用同一份字节构建）
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime
+          path: dist/servermoe-*-runtime.tar.gz
+          if-no-files-found: error
+
+  image:
+    runs-on: ${{ matrix.runs-on }}
+    needs: package
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runs-on: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64
+            runs-on: ubuntu-24.04-arm   # 公开仓库免费的原生 ARM64 runner，无需 QEMU 模拟
+    steps:
+      - uses: actions/checkout@v4      # 取 Dockerfile.release
+
+      - name: 下载运行时产物
+        uses: actions/download-artifact@v4
+        with:
+          name: runtime
+          path: dist
+
+      - name: 解包为镜像构建上下文
+        run: |
+          mkdir -p pkg
+          tar -xzf "dist/servermoe-${TAG}-runtime.tar.gz" -C pkg --strip-components=1
+
       - name: 登录 Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: 构建并推送镜像
+      - name: 设置 buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 构建并按 digest 推送（${{ matrix.platform }}，原生执行）
+        id: build
         uses: docker/build-push-action@v6
         with:
-          context: .
+          context: pkg
+          file: Dockerfile.release
           push: true
-          tags: |
-            docker.io/${{ github.repository_owner }}/servermoe:${{ github.ref_name }}
-            docker.io/${{ github.repository_owner }}/servermoe:latest
+          platforms: ${{ matrix.platform }}
+          # 关闭 provenance attestation：digest 指向纯镜像 manifest，便于合并与按 digest 拉取
+          provenance: false
+          # 注入版本号：镜像内应用据此判断是否为官方 Release（自构建无此值则跳过更新检测）
+          build-args: |
+            MOE_VERSION=${{ github.ref_name }}
           labels: |
             org.opencontainers.image.version=${{ github.ref_name }}
             org.opencontainers.image.licenses=GPL-3.0-or-later
+          outputs: type=image,name=docker.io/${{ github.repository_owner }}/servermoe,push-by-digest=true,name-canonical=true,push=true
+
+      - name: 导出镜像 digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: 上传 digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+
+      - name: 拉取本架构镜像并冒烟（原生执行）
+        run: |
+          docker pull "$IMAGE@${{ steps.build.outputs.digest }}"
+          docker tag "$IMAGE@${{ steps.build.outputs.digest }}" "$IMAGE:$TAG"
+          docker run -d --name moe-smoke -p 18099:8080 "$IMAGE:$TAG"
+          ok=""
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:18099/healthz > /dev/null 2>&1; then ok=1; break; fi
+            sleep 1
+          done
+          docker logs moe-smoke 2>&1 | tail -5 || true
+          docker rm -f moe-smoke > /dev/null 2>&1 || true
+          if [ -z "$ok" ]; then
+            echo "::error::${{ matrix.arch }} 镜像冒烟测试失败"
+            exit 1
+          fi
+          echo "${{ matrix.arch }} 镜像冒烟测试通过"
+
+      - name: 导出镜像离线包（docker load 可直接导入）
+        run: |
+          docker save "$IMAGE:$TAG" | gzip > "dist/servermoe-${TAG}-docker-${{ matrix.arch }}.tar.gz"
+
+      - name: 上传镜像离线包
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-${{ matrix.arch }}
+          path: dist/servermoe-*-docker-*.tar.gz
+          if-no-files-found: error
+
+  release:
+    runs-on: ubuntu-latest
+    needs: [package, image]
+    steps:
+      - name: 下载各架构镜像 digest
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: 登录 Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: 合并推送多架构 manifest（<tag> 与 latest）
+        run: |
+          refs=""
+          for f in /tmp/digests/*; do
+            refs="$refs docker.io/$IMAGE@sha256:$(basename "$f")"
+          done
+          docker buildx imagetools create \
+            -t "docker.io/$IMAGE:$TAG" \
+            -t "docker.io/$IMAGE:latest" \
+            $refs
+
+      - name: 下载运行时产物
+        uses: actions/download-artifact@v4
+        with:
+          name: runtime
+          path: dist
+
+      - name: 下载镜像离线包
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: docker-*
+          merge-multiple: true
 
       - name: 创建 GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: ServerMoe ${{ github.ref_name }}
           generate_release_notes: true
+          files: |
+            dist/servermoe-*-runtime.tar.gz
+            dist/servermoe-*-docker-amd64.tar.gz
+            dist/servermoe-*-docker-arm64.tar.gz
           body: |
-            ## Docker 镜像
+            ## 安装
+
+            ### Docker Hub（在线拉取，自动匹配架构）
 
             ```bash
             docker pull ${{ github.repository_owner }}/servermoe:${{ github.ref_name }}
+            docker run -d --name servermoe -p 8080:8080 -v servermoe-data:/data ${{ github.repository_owner }}/servermoe:${{ github.ref_name }}
+            curl http://localhost:8080/healthz
+            ```
+
+            ### Docker 离线导入（无外网服务器）
+
+            镜像离线包按架构提供：`uname -m` 为 `x86_64` 选 amd64，`aarch64` 选 arm64。
+
+            ```bash
+            docker load -i servermoe-${{ github.ref_name }}-docker-<arch>.tar.gz
+            docker run -d --name servermoe -p 8080:8080 -v servermoe-data:/data ${{ github.repository_owner }}/servermoe:${{ github.ref_name }}
+            ```
+
+            ### 裸机运行时包（需 Bun ≥ 1.4，免装依赖，架构无关）
+
+            运行时包内为 TS 源码 + 纯 JS 依赖，amd64 / arm64 通用。
+
+            ```bash
+            tar xzf servermoe-${{ github.ref_name }}-runtime.tar.gz   # 解出 servermoe/：src + 生产依赖
+            MOE_VERSION=${{ github.ref_name }} bun run servermoe/src/index.ts
             ```

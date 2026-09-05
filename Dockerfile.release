@@ -1,19 +1,14 @@
-# 本地源码构建用（compose / docker build）；Release CI 用 Dockerfile.release
-# （以运行时产物为上下文，不在镜像内重复安装依赖）。
-FROM oven/bun:1.4 AS deps
-WORKDIR /app
-COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile --production
+# Release 专用：构建上下文 = release workflow 产出的运行时包
+# （servermoe-*-runtime.tar.gz 解包后的 servermoe/ 目录，内含 src/ node_modules/
+# package.json LICENSE THIRD-PARTY-NOTICES.md），镜像内容与产物压缩包一致，
+# 不重复安装依赖。本地源码构建请用根目录 Dockerfile（自动 bun install）。
+FROM oven/bun:1.4
 
-FROM oven/bun:1.4 AS runtime
 # 官方发布镜像由 release workflow 传入 tag（如 0.2.1）；缺省为空 = 自构建，应用将跳过更新检测
 ARG MOE_VERSION=
 WORKDIR /app
 ENV NODE_ENV=production MOE_DATA_DIR=/data MOE_PORT=8080 MOE_VERSION=${MOE_VERSION}
-COPY --from=deps /app/node_modules node_modules
-COPY package.json ./
-COPY src src
-COPY LICENSE THIRD-PARTY-NOTICES.md ./
+COPY . .
 LABEL org.opencontainers.image.title="ServerMoe" \
       org.opencontainers.image.licenses="GPL-3.0-or-later" \
       org.opencontainers.image.description="私有部署微信消息网关（ServerChan 兼容推送 + 关键词路由）" \
