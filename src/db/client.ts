@@ -128,7 +128,7 @@ export const SCHEMA_DDL: readonly string[] = [
     account_id text PRIMARY KEY NOT NULL,
     imap_enc text NOT NULL,
     smtp_enc text NOT NULL,
-    from text,
+    "from" text,
     poll_sec integer DEFAULT 60 NOT NULL,
     enabled integer DEFAULT true NOT NULL,
     uid_validity text,
