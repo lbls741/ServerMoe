@@ -1,0 +1,1 @@
+ALTER TABLE `login_sessions` ADD `last_poll_at` integer;

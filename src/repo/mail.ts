@@ -18,27 +18,22 @@ export interface MailConfig extends MailConfigRow {
   smtp: MailServerConfig;
 }
 
-export function getMailConfigRow(db: Db, accountId: string): MailConfigRow | undefined {
-  return db.select().from(mailConfigs).where(eq(mailConfigs.accountId, accountId)).get();
+export async function getMailConfigRow(db: Db, accountId: string): Promise<MailConfigRow | undefined> {
+  return await db.select().from(mailConfigs).where(eq(mailConfigs.accountId, accountId)).get();
 }
 
-export function listEnabledMailAccounts(db: Db): string[] {
-  return db
-    .select()
-    .from(mailConfigs)
-    .all()
-    .filter((r) => r.enabled)
-    .map((r) => r.accountId);
+export async function listEnabledMailAccounts(db: Db): Promise<string[]> {
+  return (await db.select().from(mailConfigs).all()).filter((r) => r.enabled).map((r) => r.accountId);
 }
 
 /** 解密出完整配置（含明文密码），仅供邮件服务内部使用。 */
-export function decryptMailConfig(db: Db, masterKey: Buffer, row: MailConfigRow): MailConfig {
+export function decryptMailConfig(row: MailConfigRow, masterKey: Buffer): MailConfig {
   const imap = JSON.parse(decryptString(masterKey, row.imapEnc)) as MailServerConfig;
   const smtp = JSON.parse(decryptString(masterKey, row.smtpEnc)) as MailServerConfig;
   return { ...row, imap, smtp };
 }
 
-export function upsertMailConfig(
+export async function upsertMailConfig(
   db: Db,
   row: {
     accountId: string;
@@ -48,7 +43,7 @@ export function upsertMailConfig(
     pollSec?: number;
     enabled?: boolean;
   },
-): MailConfigRow {
+): Promise<MailConfigRow> {
   const values = {
     accountId: row.accountId,
     imapEnc: row.imapEnc,
@@ -57,7 +52,7 @@ export function upsertMailConfig(
     pollSec: row.pollSec ?? 60,
     enabled: row.enabled ?? true,
   };
-  return db
+  return (await db
     .insert(mailConfigs)
     .values(values)
     .onConflictDoUpdate({
@@ -72,17 +67,17 @@ export function upsertMailConfig(
       },
     })
     .returning()
-    .get()!;
+    .get())!;
 }
 
-export function updateMailState(
+export async function updateMailState(
   db: Db,
   accountId: string,
   patch: Partial<Pick<MailConfigRow, "uidValidity" | "lastUid" | "lastPollAt" | "lastError" | "enabled">>,
-): void {
-  db.update(mailConfigs).set(patch).where(eq(mailConfigs.accountId, accountId)).run();
+): Promise<void> {
+  await db.update(mailConfigs).set(patch).where(eq(mailConfigs.accountId, accountId)).run();
 }
 
-export function deleteMailConfig(db: Db, accountId: string): void {
-  db.delete(mailConfigs).where(eq(mailConfigs.accountId, accountId)).run();
+export async function deleteMailConfig(db: Db, accountId: string): Promise<void> {
+  await db.delete(mailConfigs).where(eq(mailConfigs.accountId, accountId)).run();
 }

@@ -20,8 +20,8 @@ export interface PushLogEntry {
   ip?: string | null;
 }
 
-export function addPushLog(db: Db, e: PushLogEntry): number {
-  const row = db
+export async function addPushLog(db: Db, e: PushLogEntry): Promise<number> {
+  const row = await db
     .insert(pushLog)
     .values({
       ts: e.ts,
@@ -52,8 +52,9 @@ export interface InboundLogEntry {
   reply?: string | null;
 }
 
-export function addInboundLog(db: Db, e: InboundLogEntry): void {
-  db.insert(inboundLog)
+export async function addInboundLog(db: Db, e: InboundLogEntry): Promise<void> {
+  await db
+    .insert(inboundLog)
     .values({
       ts: e.ts,
       accountId: e.accountId,
@@ -66,15 +67,15 @@ export function addInboundLog(db: Db, e: InboundLogEntry): void {
     .run();
 }
 
-export function gcLogs(db: Db, olderThanTs: number): void {
-  db.delete(pushLog).where(lt(pushLog.ts, olderThanTs)).run();
-  db.delete(inboundLog).where(lt(inboundLog.ts, olderThanTs)).run();
+export async function gcLogs(db: Db, olderThanTs: number): Promise<void> {
+  await db.delete(pushLog).where(lt(pushLog.ts, olderThanTs)).run();
+  await db.delete(inboundLog).where(lt(inboundLog.ts, olderThanTs)).run();
 }
 
-export function listRecentPush(db: Db, limit = 30): PushLogRow[] {
-  return db.select().from(pushLog).orderBy(desc(pushLog.id)).limit(limit).all();
+export async function listRecentPush(db: Db, limit = 30): Promise<PushLogRow[]> {
+  return await db.select().from(pushLog).orderBy(desc(pushLog.id)).limit(limit).all();
 }
 
-export function listRecentInbound(db: Db, limit = 30): InboundLogRow[] {
-  return db.select().from(inboundLog).orderBy(desc(inboundLog.id)).limit(limit).all();
+export async function listRecentInbound(db: Db, limit = 30): Promise<InboundLogRow[]> {
+  return await db.select().from(inboundLog).orderBy(desc(inboundLog.id)).limit(limit).all();
 }

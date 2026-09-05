@@ -21,8 +21,8 @@ export interface NewLoginSession {
   ttlMs: number;
 }
 
-export function createLoginSession(db: Db, s: NewLoginSession): LoginSessionRow {
-  return db
+export async function createLoginSession(db: Db, s: NewLoginSession): Promise<LoginSessionRow> {
+  return (await db
     .insert(loginSessions)
     .values({
       id: s.id,
@@ -33,17 +33,17 @@ export function createLoginSession(db: Db, s: NewLoginSession): LoginSessionRow 
       expiresAt: s.now + s.ttlMs,
     })
     .returning()
-    .get()!;
+    .get())!;
 }
 
-export function getLoginSession(db: Db, id: string): LoginSessionRow | undefined {
-  return db.select().from(loginSessions).where(eq(loginSessions.id, id)).get();
+export async function getLoginSession(db: Db, id: string): Promise<LoginSessionRow | undefined> {
+  return await db.select().from(loginSessions).where(eq(loginSessions.id, id)).get();
 }
 
-export function updateLoginSession(db: Db, id: string, patch: Partial<Omit<LoginSessionRow, "id" | "createdAt">>): void {
-  db.update(loginSessions).set(patch).where(eq(loginSessions.id, id)).run();
+export async function updateLoginSession(db: Db, id: string, patch: Partial<Omit<LoginSessionRow, "id" | "createdAt">>): Promise<void> {
+  await db.update(loginSessions).set(patch).where(eq(loginSessions.id, id)).run();
 }
 
-export function deleteLoginSession(db: Db, id: string): void {
-  db.delete(loginSessions).where(eq(loginSessions.id, id)).run();
+export async function deleteLoginSession(db: Db, id: string): Promise<void> {
+  await db.delete(loginSessions).where(eq(loginSessions.id, id)).run();
 }

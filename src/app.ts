@@ -9,23 +9,27 @@ import { mountV1 } from "./api/v1.ts";
 import type { WechatChannel } from "./channels/wechat/channel.ts";
 import { listAccounts } from "./repo/accounts.ts";
 import { renderIndex } from "./web/pages.ts";
+import { createUpdateChecker, updateHeaderPayload, type UpdateChecker } from "./update/checker.ts";
 
 export interface AppDeps {
   core: Core;
   push: PushService;
   wechat: WechatChannel;
   limiter: RateLimiter;
+  /** 注入可测试；缺省按 cfg 创建真实检测器 */
+  updateChecker?: UpdateChecker;
 }
 
 export function createApp(deps: AppDeps): Hono {
   const app = new Hono();
   app.use(secureHeaders());
+  const updater = deps.updateChecker ?? createUpdateChecker(deps.core);
 
   app.get("/healthz", (c) => c.json({ status: "ok" }));
 
   // 账号信息属敏感数据，与 /api/v1/sessions 同等鉴权；探针请使用 /healthz
-  app.get("/statusz", requireAdmin(deps.core), (c) => {
-    const accounts = listAccounts(deps.core.db).map((a) => ({
+  app.get("/statusz", requireAdmin(deps.core), async (c) => {
+    const accounts = (await listAccounts(deps.core.db)).map((a) => ({
       id: a.id,
       label: a.label,
       status: a.status,
@@ -36,7 +40,15 @@ export function createApp(deps: AppDeps): Hono {
     return c.json({ status: "ok", accounts, channelId: deps.wechat.id });
   });
 
-  app.get("/", (c) => c.html(renderIndex()));
+  // 更新检测随前端请求按需执行（内部有阈值节流与并发去重），结果随响应头带给管理页
+  app.use("/api/v1/*", async (c, next) => {
+    c.header("X-Moe-Update", JSON.stringify(updateHeaderPayload(await updater.maybeCheck())));
+    await next();
+  });
+
+  app.get("/", async (c) => {
+    return c.html(renderIndex(updateHeaderPayload(await updater.maybeCheck())));
+  });
 
   mountV1(app, deps.core, deps.push, deps.wechat, deps.limiter);
   // ServerChan 兼容层挂在最后（单段 catch-all：/:spec 且以 .send 结尾才受理）

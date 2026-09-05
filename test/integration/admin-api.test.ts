@@ -62,8 +62,8 @@ describe("管理端点（M4）", () => {
     expect(j.code).toBe(0);
     expect(j.sendkey).toMatch(/^MOE[23456789A-HJ-NP-Za-km-z]{16}$/);
 
-    expect(findActiveSendkey(db, sha256Hex(core.salt + ":MOEOLDOLDOLD0001"))).toBeUndefined();
-    const fresh = findActiveSendkey(db, sha256Hex(core.salt + ":" + j.sendkey));
+    expect(await findActiveSendkey(db, sha256Hex(core.salt + ":MOEOLDOLDOLD0001"))).toBeUndefined();
+    const fresh = await findActiveSendkey(db, sha256Hex(core.salt + ":" + j.sendkey));
     expect(fresh?.accountId).toBe("bot-a");
   });
 

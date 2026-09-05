@@ -70,24 +70,24 @@ function kill(child: ChildProcess): Promise<void> {
   return exitOf(child);
 }
 
-function waitFor(fn: () => boolean, timeoutMs = 5000, stepMs = 25): Promise<void> {
+function waitFor(fn: () => boolean | Promise<boolean>, timeoutMs = 5000, stepMs = 25): Promise<void> {
   const t0 = Date.now();
   return new Promise((resolve, reject) => {
-    const tick = () => {
+    const tick = async () => {
       try {
-        if (fn()) return resolve();
+        if (await fn()) return resolve();
       } catch (err) {
         return reject(err);
       }
       if (Date.now() - t0 > timeoutMs) return reject(new Error("waitFor timeout"));
       setTimeout(tick, stepMs);
     };
-    tick();
+    void tick();
   });
 }
 
-function keywordRow() {
-  return listKeywords(db, "bot-demo")[0];
+async function keywordRow() {
+  return (await listKeywords(db, "bot-demo"))[0];
 }
 
 afterAll(async () => {
@@ -103,8 +103,8 @@ describe("关键词接收 demo（examples/keyword-receiver）", () => {
   test("注册 → HMAC 有效转发被接收并回复，伪造签名被 401 拒绝", async () => {
     const child = runDemo();
     try {
-      await waitFor(() => Boolean(keywordRow()));
-      const row = keywordRow()!;
+      await waitFor(async () => Boolean(await keywordRow()));
+      const row = (await keywordRow())!;
       expect(row.keyword).toBe("demo");
       expect(row.matchMode).toBe("prefix");
       const hookUrl = new URL(row.url);
@@ -142,8 +142,8 @@ describe("关键词接收 demo（examples/keyword-receiver）", () => {
     try {
       await waitFor(() => out.includes("删除旧定义后重新注册"));
       await waitFor(() => out.includes("已注册"));
-      await waitFor(() => listKeywords(db, "bot-demo").length === 1);
-      expect(keywordRow()!.keyword).toBe("demo");
+      await waitFor(async () => (await listKeywords(db, "bot-demo")).length === 1);
+      expect((await keywordRow())!.keyword).toBe("demo");
     } finally {
       await kill(child);
     }
@@ -161,7 +161,7 @@ describe("关键词接收 demo（examples/keyword-receiver）", () => {
     child.stderr?.on("data", (c: Buffer) => (buf += c.toString()));
     try {
       await waitFor(() => buf.includes("未带协议"));
-      await waitFor(() => listKeywords(db, "bot-demo").length === 1);
+      await waitFor(async () => (await listKeywords(db, "bot-demo")).length === 1);
       await waitFor(() => buf.includes("已注册"));
       expect(buf).not.toContain("unknown scheme");
     } finally {

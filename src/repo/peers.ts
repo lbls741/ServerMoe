@@ -4,8 +4,9 @@ import { peers } from "../db/schema.ts";
 
 export type PeerRow = typeof peers.$inferSelect;
 
-export function upsertPeer(db: Db, accountId: string, userId: string, contextToken: string, now: number): void {
-  db.insert(peers)
+export async function upsertPeer(db: Db, accountId: string, userId: string, contextToken: string, now: number): Promise<void> {
+  await db
+    .insert(peers)
     .values({ accountId, userId, contextToken, updatedAt: now })
     .onConflictDoUpdate({
       target: [peers.accountId, peers.userId],
@@ -14,18 +15,19 @@ export function upsertPeer(db: Db, accountId: string, userId: string, contextTok
     .run();
 }
 
-export function getPeerToken(db: Db, accountId: string, userId: string): string | undefined {
-  return db
+export async function getPeerToken(db: Db, accountId: string, userId: string): Promise<string | undefined> {
+  const row = await db
     .select()
     .from(peers)
     .where(and(eq(peers.accountId, accountId), eq(peers.userId, userId)))
-    .get()?.contextToken;
+    .get();
+  return row?.contextToken;
 }
 
-export function listPeers(db: Db, accountId: string): PeerRow[] {
-  return db.select().from(peers).where(eq(peers.accountId, accountId)).all();
+export async function listPeers(db: Db, accountId: string): Promise<PeerRow[]> {
+  return await db.select().from(peers).where(eq(peers.accountId, accountId)).all();
 }
 
-export function deleteAccountPeers(db: Db, accountId: string): void {
-  db.delete(peers).where(eq(peers.accountId, accountId)).run();
+export async function deleteAccountPeers(db: Db, accountId: string): Promise<void> {
+  await db.delete(peers).where(eq(peers.accountId, accountId)).run();
 }

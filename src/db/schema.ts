@@ -1,4 +1,4 @@
-import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const settings = sqliteTable("settings", {
   key: text("key").primaryKey(),
@@ -16,6 +16,12 @@ export const accounts = sqliteTable("accounts", {
   pausedUntil: integer("paused_until"),
   lastError: text("last_error"),
   lastInboundAt: integer("last_inbound_at"),
+  /** 24h 推送窗口临期提醒（core/warn.ts）：开关 / 自定义文案 / 提前量秒（null=默认） */
+  warnEnabled: integer("warn_enabled", { mode: "boolean" }).notNull().default(false),
+  warnText: text("warn_text"),
+  warnLeadSec: integer("warn_lead_sec"),
+  /** 当前静默窗口内最近一次提醒时刻；与 last_inbound_at 比较实现「每窗口至多一条」 */
+  warnedAt: integer("warned_at"),
   syncBuf: text("sync_buf").notNull().default(""),
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at").notNull(),
@@ -125,6 +131,8 @@ export const loginSessions = sqliteTable("login_sessions", {  id: text("id").pri
   qrcodeUrl: text("qrcode_url").notNull(),
   refreshCount: integer("refresh_count").notNull().default(0),
   pollHost: text("poll_host"), // IDC 迁移后的轮询域名
+  /** 请求驱动轮询（Workers，login.ts pollLoginOnce）的上游防抖时间戳；driver 模式不使用 */
+  lastPollAt: integer("last_poll_at"),
   verifyCode: text("verify_code"),
   botId: text("bot_id"),
   tokenEnc: text("token_enc"),
@@ -145,4 +153,25 @@ export const mailConfigs = sqliteTable("mail_configs", {
   lastUid: integer("last_uid"),
   lastPollAt: integer("last_poll_at"),
   lastError: text("last_error"),
+});
+
+/**
+ * 每 sendkey 令牌桶的持久化形态（api/ratelimit.ts 的 D1 实现）。
+ * 自部署用内存实现即可；Workers 多隔离体间内存不共享，落到 DB 做原子扣减。
+ */
+export const rateBuckets = sqliteTable("rate_buckets", {
+  key: text("key").primaryKey(),
+  tokens: real("tokens").notNull(),
+  last: integer("last").notNull(),
+});
+
+/**
+ * 按需收割租约（core/ingest 方案3）：发送前抢租约做一次短收割，
+ * 与 cron/DO 收割互斥，守住 iLink「同一 bot_token 同一时间只允许一个 getupdates 消费者」约束。
+ */
+export const ingestLeases = sqliteTable("ingest_leases", {
+  accountId: text("account_id").primaryKey(),
+  /** 租约到期时刻（epoch ms）；早于 now 可抢 */
+  leasedUntil: integer("leased_until").notNull(),
+  lastPollAt: integer("last_poll_at"),
 });

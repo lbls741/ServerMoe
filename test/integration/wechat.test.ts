@@ -10,13 +10,15 @@ import { createWechatChannel } from "../../src/channels/wechat/channel.ts";
 import { MessageItemType, MessageType, type WeixinMessage } from "../../src/channels/wechat/ilink/types.ts";
 import { loadConfig } from "../../src/config.ts";
 import { createPushService } from "../../src/core/push.ts";
+import { createWindowWarner } from "../../src/core/warn.ts";
 import type { Core } from "../../src/core.ts";
 import { hmacSignHex } from "../../src/crypto.ts";
 import { closeDb, openDb } from "../../src/db/index.ts";
 import { createLogger } from "../../src/log.ts";
-import { getAccount, createAccount, listAccounts, updateAccountStatus } from "../../src/repo/accounts.ts";
+import { getAccount, createAccount, listAccounts, touchAccountInbound, updateAccountStatus } from "../../src/repo/accounts.ts";
 import { getLoginSession } from "../../src/repo/loginSessions.ts";
 import { listKeywords } from "../../src/repo/keywords.ts";
+import { listRecentInbound } from "../../src/repo/logs.ts";
 import { getPeerToken, upsertPeer } from "../../src/repo/peers.ts";
 import { listPendingOutbox } from "../../src/repo/outbox.ts";
 import { createInboundRouter } from "../../src/router/inbound.ts";
@@ -85,19 +87,19 @@ function userMsg(from: string, ctx: string, text = "hello"): WeixinMessage {
   };
 }
 
-function waitFor(fn: () => boolean, timeoutMs = 4000, stepMs = 25, label = "?"): Promise<void> {
+function waitFor(fn: () => boolean | Promise<boolean>, timeoutMs = 4000, stepMs = 25, label = "?"): Promise<void> {
   const t0 = Date.now();
   return new Promise((resolve, reject) => {
-    const tick = () => {
+    const tick = async () => {
       try {
-        if (fn()) return resolve();
+        if (await fn()) return resolve();
       } catch (err) {
         return reject(err);
       }
       if (Date.now() - t0 > timeoutMs) return reject(new Error(`waitFor timeout: ${label}`));
       setTimeout(tick, stepMs);
     };
-    tick();
+    void tick();
   });
 }
 
@@ -127,7 +129,7 @@ describe("绑定流程", () => {
     expect(j1.qrcodeUrl).toContain("https://qr.example");
 
     // 无需任何浏览器参与：服务端驱动轮询 mock 直到 confirmed
-    await waitFor(() => getLoginSession(db, j1.sessionId)?.status === "confirmed");
+    await waitFor(async () => (await getLoginSession(db, j1.sessionId))?.status === "confirmed");
 
     const cf = (await (
       await app.request("/api/v1/login/confirm", { method: "POST", headers: JSON_H, body: JSON.stringify({ sessionId: j1.sessionId }) })
@@ -144,23 +146,23 @@ describe("绑定流程", () => {
   });
 
   test("预热：入站消息捕获 context_token 并持久化游标", async () => {
-    await waitFor(() => Boolean(getPeerToken(db, "bot-1", "user-1")));
-    expect(getPeerToken(db, "bot-1", "user-1")).toBe("ctx-1");
-    expect(getAccount(db, "bot-1")?.syncBuf).toBe("BUF1");
+    await waitFor(async () => Boolean(await getPeerToken(db, "bot-1", "user-1")));
+    expect(await getPeerToken(db, "bot-1", "user-1")).toBe("ctx-1");
+    expect((await getAccount(db, "bot-1"))?.syncBuf).toBe("BUF1");
   });
 
   test("未预热账号的推送返回 450 并入 outbox；捕获 token 后自动补发", async () => {
     // 直接落库一个无预热记录的账号（不走登录，避免 monitor 抢消息）；token 用真实可解密密文
     const { encryptString, sha256Hex } = await import("../../src/crypto.ts");
     const { createSendkey } = await import("../../src/repo/sendkeys.ts");
-    createAccount(db, {
+    await createAccount(db, {
       id: "bot-x",
       tokenEnc: encryptString(masterKey, "tok-x"),
       baseUrl: `http://127.0.0.1:${mock.port}`,
       ownerUserId: "user-x",
       now: Date.now(),
     });
-    createSendkey(db, { keyHash: sha256Hex(core.salt + ":MOEXTESTTESTTEST1"), accountId: "bot-x", now: Date.now() });
+    await createSendkey(db, { keyHash: sha256Hex(core.salt + ":MOEXTESTTESTTEST1"), accountId: "bot-x", now: Date.now() });
 
     const r = await app.request("/MOEXTESTTESTTEST1.send", {
       method: "POST",
@@ -169,15 +171,15 @@ describe("绑定流程", () => {
     });
     expect(r.status).toBe(200);
     expect(((await r.json()) as { code: number }).code).toBe(450);
-    expect(listPendingOutbox(db, "bot-x", "user-x")).toHaveLength(1);
+    expect(await listPendingOutbox(db, "bot-x", "user-x")).toHaveLength(1);
 
     // user-x 预热（模拟入站）→ onWarmup → flushOutbox → mock 收到补发
-    upsertPeer(db, "bot-x", "user-x", "ctx-x", Date.now());
+    await upsertPeer(db, "bot-x", "user-x", "ctx-x", Date.now());
     await push.flushOutbox("bot-x", "user-x");
     await waitFor(() => mock.record.sends.some((s) => s.msg.to_user_id === "user-x"));
     const flushed = mock.record.sends.find((s) => s.msg.to_user_id === "user-x")!;
     expect(flushed.msg.item_list?.[0]?.text_item?.text).toContain("排队消息");
-    expect(listPendingOutbox(db, "bot-x", "user-x")).toHaveLength(0);
+    expect(await listPendingOutbox(db, "bot-x", "user-x")).toHaveLength(0);
   });
 });
 
@@ -242,7 +244,7 @@ describe("ServerChan 兼容推送", () => {
     const j = (await r.json()) as { code: number; reason?: string };
     expect(j.code).toBe(451);
     expect(j.reason).toBe("TOKEN_EXPIRED");
-    expect(getAccount(db, "bot-1")?.status).toBe("rebind_needed");
+    expect((await getAccount(db, "bot-1"))?.status).toBe("rebind_needed");
     mock.scenario.sends.splice(0, mock.scenario.sends.length, { ret: 0 });
   });
 });
@@ -255,7 +257,7 @@ describe("多登录与生命周期", () => {
 
     const r1 = await app.request("/api/v1/login/start", { method: "POST", headers: H });
     const j1 = (await r1.json()) as { sessionId: string };
-    await waitFor(() => getLoginSession(db, j1.sessionId)?.status === "confirmed"); // 驱动消费 [wait, confirmed(bot-2)]
+    await waitFor(async () => (await getLoginSession(db, j1.sessionId))?.status === "confirmed"); // 驱动消费 [wait, confirmed(bot-2)]
     const cf = (await (
       await app.request("/api/v1/login/confirm", { method: "POST", headers: JSON_H, body: JSON.stringify({ sessionId: j1.sessionId }) })
     ).json()) as { code: number; accountId: string; sendkey: string };
@@ -264,8 +266,8 @@ describe("多登录与生命周期", () => {
     sendkeyB = cf.sendkey;
     expect(sendkeyB).not.toBe(sendkeyA);
 
-    await waitFor(() => Boolean(getPeerToken(db, "bot-2", "user-2")));
-    expect(getPeerToken(db, "bot-2", "user-2")).toBe("ctx-2");
+    await waitFor(async () => Boolean(await getPeerToken(db, "bot-2", "user-2")));
+    expect(await getPeerToken(db, "bot-2", "user-2")).toBe("ctx-2");
   });
 
   test("配对码门控：need_verifycode 挂起等待，提交后携带 verify_code 继续", async () => {
@@ -273,7 +275,7 @@ describe("多登录与生命周期", () => {
     mock.scenario.qrStatus.push({ status: "need_verifycode" });
     const r1 = await app.request("/api/v1/login/start", { method: "POST", headers: H });
     const j1 = (await r1.json()) as { sessionId: string };
-    await waitFor(() => getLoginSession(db, j1.sessionId)?.status === "need_verifycode");
+    await waitFor(async () => (await getLoginSession(db, j1.sessionId))?.status === "need_verifycode");
 
     mock.scenario.qrStatus.push({ status: "scaned" }, { status: "confirmed", bot_token: "tok-3", ilink_bot_id: "bot-3", baseurl: `http://127.0.0.1:${mock.port}`, ilink_user_id: "user-3" });
     await app.request("/api/v1/login/verify", {
@@ -282,15 +284,15 @@ describe("多登录与生命周期", () => {
       body: JSON.stringify({ sessionId: j1.sessionId, code: "1234" }),
     });
 
-    await waitFor(() => getLoginSession(db, j1.sessionId)?.status === "confirmed");
-    expect(getLoginSession(db, j1.sessionId)?.botId).toBe("bot-3");
+    await waitFor(async () => (await getLoginSession(db, j1.sessionId))?.status === "confirmed");
+    expect((await getLoginSession(db, j1.sessionId))?.botId).toBe("bot-3");
     expect(mock.record.qrPolls).toContain("1234");
   });
 
   test("解绑：停止 monitor、吊销 sendkey、删除账号与 peers", async () => {
     const r = await app.request("/api/v1/sessions/bot-x", { method: "DELETE", headers: H });
     expect(((await r.json()) as { code: number }).code).toBe(0);
-    expect(getAccount(db, "bot-x")).toBeUndefined();
+    expect(await getAccount(db, "bot-x")).toBeUndefined();
   });
 });
 
@@ -439,14 +441,14 @@ describe("多用户（M6）", () => {
   });
 
   test("席位上限：占满后拒绝新登录", async () => {
-    expect(listAccounts(db).length).toBe(2);
+    expect((await listAccounts(db)).length).toBe(2);
     cfg.seatLimit = 2;
     try {
       const r = await app.request("/api/v1/login/start", { method: "POST", headers: H });
       expect(r.status).toBe(409);
       const j = (await r.json()) as { code: number; message: string };
       expect(j.message).toContain("席位已满");
-      expect(listAccounts(db).length).toBe(2);
+      expect((await listAccounts(db)).length).toBe(2);
     } finally {
       cfg.seatLimit = 5;
     }
@@ -460,16 +462,16 @@ describe("多用户（M6）", () => {
     );
     const r1 = await app.request("/api/v1/login/start", { method: "POST", headers: H });
     const j1 = (await r1.json()) as { sessionId: string };
-    await waitFor(() => getLoginSession(db, j1.sessionId)?.status === "confirmed", 4000, 25, "bot-2b confirmed");
+    await waitFor(async () => (await getLoginSession(db, j1.sessionId))?.status === "confirmed", 4000, 25, "bot-2b confirmed");
     const cf = (await (
       await app.request("/api/v1/login/confirm", { method: "POST", headers: JSON_H, body: JSON.stringify({ sessionId: j1.sessionId }) })
     ).json()) as { code: number; accountId: string; sendkey: string };
     expect(cf.code).toBe(0);
     expect(cf.accountId).toBe("bot-2b");
 
-    await waitFor(() => getAccount(db, "bot-2") === undefined, 4000, 25, "stale account removed");
-    expect(getAccount(db, "bot-2b")).toBeDefined();
-    expect(listKeywords(db, "bot-2")).toHaveLength(0);
+    await waitFor(async () => (await getAccount(db, "bot-2")) === undefined, 4000, 25, "stale account removed");
+    expect(await getAccount(db, "bot-2b")).toBeDefined();
+    expect(await listKeywords(db, "bot-2")).toHaveLength(0);
     expect(mock.record.notifyStops).toBeGreaterThan(stops);
     expect((await app.request(`/${sendkeyB}.send?title=x`)).status).toBe(400); // 旧 sendkey 已吊销
 
@@ -485,5 +487,83 @@ describe("多用户（M6）", () => {
     );
     const flushed = mock.record.sends.find((s) => (s.msg.item_list?.[0]?.text_item?.text ?? "").includes("hi-new"))!;
     expect(flushed.msg.to_user_id).toBe("user-2");
+  });
+});
+
+describe("建联前消息忽略", () => {
+  test("全新 peer 的首条消息只建联不路由，建联后恢复正常路由", async () => {
+    // 首条消息（建联预热）：捕获 context_token，但不得触发「未识别的指令」回执
+    mock.scenario.updates.push({ msgs: [userMsg("user-fresh", "ctx-fresh", "随便聊聊")], accountId: "bot-1" });
+    await waitFor(async () => Boolean(await getPeerToken(db, "bot-1", "user-fresh")), 4000, 25, "fresh peer connected");
+    await new Promise((r) => setTimeout(r, 300));
+    expect(mock.record.sends.filter((s) => s.msg.to_user_id === "user-fresh")).toHaveLength(0);
+    // 等待队列只记录推送请求：用户消息不入 outbox
+    expect(await listPendingOutbox(db, "bot-1", "user-fresh")).toHaveLength(0);
+
+    // 建联后的消息恢复正常路由：bot-1 无匹配关键词 → 未命中提醒
+    mock.scenario.updates.push({ msgs: [userMsg("user-fresh", "ctx-fresh-2", "再来一句")], accountId: "bot-1" });
+    await waitFor(
+      () => mock.record.sends.some((s) => s.msg.to_user_id === "user-fresh" && (s.msg.item_list?.[0]?.text_item?.text ?? "").includes("未识别的指令")),
+      4000,
+      25,
+      "post-connect message routed",
+    );
+
+    // 日志语义：建联消息记 warmup，后续常规消息记 captured
+    const logs = (await listRecentInbound(db, 50)).filter((l) => l.fromUserId === "user-fresh");
+    expect(logs.some((l) => l.text === "随便聊聊" && l.action === "warmup")).toBe(true);
+    expect(logs.some((l) => l.text === "再来一句" && l.action === "captured")).toBe(true);
+  });
+});
+
+describe("24h 推送窗口临期提醒", () => {
+  test("设置端点校验与回显；临期发提醒、同窗口不重发、新窗口重新武装", async () => {
+    // 参数校验：enabled 必须是 boolean
+    const bad = await app.request("/api/v1/sessions/bot-1/warn", {
+      method: "PUT",
+      headers: JSON_H,
+      body: JSON.stringify({ enabled: "yes" }),
+    });
+    expect(bad.status).toBe(400);
+
+    // 开启：提前量 12h（43200s），自定义文案；账号静默 13h → 立即临期
+    const put = await app.request("/api/v1/sessions/bot-1/warn", {
+      method: "PUT",
+      headers: JSON_H,
+      body: JSON.stringify({ enabled: true, text: "custom-remind-text", leadSec: 43200 }),
+    });
+    expect(((await put.json()) as { code: number }).code).toBe(0);
+
+    const sess = (await (await app.request("/api/v1/sessions", { headers: H })).json()) as {
+      sessions: Array<{ accountId: string; warn: { enabled: boolean; text: string | null; leadSec: number | null } }>;
+    };
+    const row = sess.sessions.find((s) => s.accountId === "bot-1")!;
+    expect(row.warn.enabled).toBe(true);
+    expect(row.warn.text).toBe("custom-remind-text");
+    expect(row.warn.leadSec).toBe(43200);
+
+    // 模拟用户 13h 前的最后一条入站 → 24h − 12h 提前量已过 → 临期
+    await touchAccountInbound(db, "bot-1", Date.now() - 13 * 3600_000);
+    const warner = createWindowWarner(core);
+    expect(await warner.sweep()).toBe(1);
+    await waitFor(
+      () => mock.record.sends.some((s) => (s.msg.item_list?.[0]?.text_item?.text ?? "").includes("custom-remind-text")),
+      4000,
+      25,
+      "warn message sent via mock ilink",
+    );
+    const sent = mock.record.sends.find((s) => (s.msg.item_list?.[0]?.text_item?.text ?? "").includes("custom-remind-text"))!;
+    expect(sent.msg.to_user_id).toBe("user-1"); // 推送目标与 push.ts 一致取 ownerUserId
+
+    // 同一静默窗口不重复提醒
+    expect(await warner.sweep()).toBe(0);
+
+    // 用户回复 → last_inbound_at 重置 → 新窗口；用注入时钟 +13h 验证重新武装
+    await touchAccountInbound(db, "bot-1", Date.now());
+    const warner2 = createWindowWarner(core, { now: () => Date.now() + 13 * 3600_000 });
+    expect(await warner2.sweep()).toBe(1);
+    expect(await warner2.sweep()).toBe(0); // 新窗口内同样只提醒一次
+    warner.shutdown();
+    warner2.shutdown();
   });
 });

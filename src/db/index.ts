@@ -1,12 +1,14 @@
 // 平台接缝：bun:sqlite 仅允许出现在本文件（见 dev-plan §1）。
-// 回退 Node 时只需把驱动换成 drizzle-orm/better-sqlite3，schema 与迁移不变。
+// 自部署（Bun）入口；Workers 用 db/d1.ts 的 openD1。统一类型与建表见 db/client.ts。
 
 import { Database } from "bun:sqlite";
-import { drizzle, type BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
+import { drizzle } from "drizzle-orm/bun-sqlite";
 import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 import * as schema from "./schema.ts";
+import type { Db } from "./client.ts";
 
-export type Db = BunSQLiteDatabase<typeof schema>;
+export type { Db } from "./client.ts";
+export { ensureSchema, SCHEMA_DDL } from "./client.ts";
 
 const clients = new WeakMap<Db, Database>();
 

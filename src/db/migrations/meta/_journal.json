@@ -22,6 +22,27 @@
       "when": 1788064269489,
       "tag": "0002_common_johnny_storm",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1788587783154,
+      "tag": "0003_loving_angel",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1788590074454,
+      "tag": "0004_condemned_famine",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1788590375274,
+      "tag": "0005_broken_tusk",
+      "breakpoints": true
     }
   ]
 }
