@@ -27,7 +27,9 @@ export function renderIndex(update?: UpdatePayload): string {
   td, th { text-align: left; padding: 4px 8px; border-bottom: 1px solid #eee; vertical-align: top; }
   .badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; }
   .active { background: #dcfce7; } .paused { background: #fef9c3; } .rebind_needed { background: #fee2e2; }
-  #qr { text-align: center; } #qr svg { width: 240px; height: 240px; }
+  #qr { text-align: center; } #qr img, #qr svg { width: 240px; max-width: 100%; height: auto; }
+  .tbl { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  td, th { overflow-wrap: break-word; }
   .muted { color: #888; font-size: 12px; }
   .err { color: #b91c1c; font-size: 13px; }
   code { background: #f4f4f5; padding: 1px 5px; border-radius: 4px; word-break: break-all; }
@@ -41,6 +43,16 @@ export function renderIndex(update?: UpdatePayload): string {
   .update-inner.available { border-color: #16a34a; background: #f0fdf4; }
   .update-inner.error { border-color: #dc2626; background: #fef2f2; }
   .update-inner.selfbuild { border-color: #cbd5e1; background: #f8fafc; }
+  @media (max-width: 640px) {
+    body { margin: 12px auto; }
+    h1 { font-size: 18px; }
+    section { padding: 12px; }
+    input, select, textarea { font-size: 16px; } /* ≥16px 避免 iOS 聚焦自动放大 */
+    button { font-size: 14px; padding: 8px 12px; }
+    .row input:not([type=checkbox]), .row select { flex: 1 1 140px; min-width: 0; }
+    .url { max-width: 160px; }
+    td, th { padding: 5px 6px; }
+  }
 </style>
 </head>
 <body>
@@ -58,7 +70,7 @@ export function renderIndex(update?: UpdatePayload): string {
 
 <section>
   <h2>账号状态 <span class="muted" id="seatInfo"></span></h2>
-  <table><tbody id="accounts"><tr><td class="muted">加载中…</td></tr></tbody></table>
+  <div class="tbl"><table><tbody id="accounts"><tr><td class="muted">加载中…</td></tr></tbody></table></div>
   <div id="keyOut"></div>
   <p class="muted">微信侧限制：用户最近一次发消息后 24 小时内 bot 才能主动推送，回复任意内容即可重置窗口。
   开启「临期提醒」后，网关会在窗口到期前按提前量向该账号发一条提醒（每个静默窗口至多一条）。</p>
@@ -101,7 +113,7 @@ export function renderIndex(update?: UpdatePayload): string {
     <input id="kwSecret" placeholder="HMAC 密钥（可选）" size="16">
     <button id="kwAdd">注册</button>
   </div>
-  <table><tbody id="kwTable"><tr><td class="muted">—</td></tr></tbody></table>
+  <div class="tbl"><table><tbody id="kwTable"><tr><td class="muted">—</td></tr></tbody></table></div>
   <p class="muted">命中后网关向 URL 转发 <code>{user_id, account_id, keyword, text, ts, msg_id}</code>；
   回复 <code>{"reply":"…"}</code> 即回发微信；带 secret 时附 HMAC 签名头。保留字：<code>help/status/bind/mail</code></p>
 </section>
@@ -176,8 +188,8 @@ export function renderIndex(update?: UpdatePayload): string {
 <section>
   <h2>收发日志（最近 30 条）</h2>
   <button class="ghost" id="logRefresh">刷新</button>
-  <table><tbody id="logIn"><tr><td class="muted">—</td></tr></tbody></table>
-  <table style="margin-top:10px"><tbody id="logPush"><tr><td class="muted">—</td></tr></tbody></table>
+  <div class="tbl"><table><tbody id="logIn"><tr><td class="muted">—</td></tr></tbody></table></div>
+  <div class="tbl" style="margin-top:10px"><table><tbody id="logPush"><tr><td class="muted">—</td></tr></tbody></table></div>
 </section>
 
 <script>${initScript}</script>
